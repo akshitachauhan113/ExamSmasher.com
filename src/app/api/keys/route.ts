@@ -15,7 +15,7 @@ const ALLOWED = new Set([
   "LLM_MODEL",
 ]);
 const MAX_VALUE_CHARS = 500;
-const TEST_TIMEOUT_MS = 25_000;
+const TEST_TIMEOUT_MS = 45_000;
 
 interface SaveBody {
   action: "save";
@@ -212,7 +212,16 @@ function friendlyYouTubeError(status: number, detail: string): string {
 }
 
 async function testGemini(key: string): Promise<Response> {
-  const models = [process.env.LLM_MODEL || "gemini-2.5-flash", "gemini-2.0-flash"];
+  const models = [
+    ...new Set(
+      [
+        process.env.LLM_MODEL?.trim(),
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+      ].filter((model): model is string => Boolean(model)),
+    ),
+  ];
   let lastDetail = "";
 
   for (const model of models) {
@@ -237,8 +246,15 @@ async function testGemini(key: string): Promise<Response> {
     lastDetail = await readErrorDetail(res);
     const text = lastDetail.toLowerCase();
 
-    // A model-name problem means the key itself was accepted.
-    if (text.includes("not found") || text.includes("is not a valid model")) continue;
+    // These mean the key authenticated fine — only the model is missing.
+    if (
+      text.includes("not found") ||
+      text.includes("is not a valid model") ||
+      text.includes("no longer available") ||
+      text.includes("please update your code to use models/")
+    ) {
+      continue;
+    }
 
     if (text.includes("API key not valid") || text.includes("keyinvalid")) {
       return Response.json({
@@ -248,6 +264,13 @@ async function testGemini(key: string): Promise<Response> {
     }
     if (text.includes("quota") || text.includes("resource_exhausted")) {
       return Response.json({ ok: true, message: "Gemini key valid (abhi quota limit aa rahi hai)." });
+    }
+    if (res.status === 503 || text.includes("high demand") || text.includes("overloaded")) {
+      // The key already authenticated — only the model backend is busy.
+      return Response.json({
+        ok: true,
+        message: "Gemini key valid ✅ — model abhi high demand me hai, thodi der baad test karo.",
+      });
     }
     if (text.includes("not been used") || text.includes("not enabled")) {
       return Response.json({

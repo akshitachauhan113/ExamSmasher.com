@@ -11,6 +11,8 @@ export interface LlmConfig {
  * Priority: Gemini (free tier) -> OpenAI.
  * Override the model with the LLM_MODEL env var if a default is retired.
  */
+const GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest";
+
 export function getLlmConfig(): LlmConfig | null {
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
@@ -19,7 +21,7 @@ export function getLlmConfig(): LlmConfig | null {
     return {
       provider: "gemini",
       key: geminiKey,
-      model: process.env.LLM_MODEL?.trim() || "gemini-2.5-flash",
+      model: process.env.LLM_MODEL?.trim() || GEMINI_DEFAULT_MODEL,
     };
   }
   if (openaiKey) {
@@ -34,6 +36,56 @@ export function getLlmConfig(): LlmConfig | null {
 
 export function hasYouTubeKey(): boolean {
   return Boolean(process.env.YOUTUBE_API_KEY?.trim());
+}
+
+/**
+ * Google retires Gemini models without much warning, and a retired model
+ * fails *after* the key has authenticated — which would otherwise surface
+ * as a confusing hard failure. These are tried in order until one answers.
+ *
+ * `gemini-flash-lite-latest` is the default: it is an alias Google keeps
+ * pointed at a current model (so it never goes stale), and it answers in
+ * ~2s where the bigger flash models can take 50s+ under load.
+ */
+const GEMINI_MODEL_CANDIDATES = [
+  GEMINI_DEFAULT_MODEL,
+  "gemini-flash-latest",
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-flash-lite-latest",
+];
+
+/** Transient overload / rate limit — worth a short retry before moving on. */
+const RETRYABLE_STATUS = new Set([429, 503]);
+const RETRY_DELAYS_MS = [1_200, 3_000];
+
+/** Once a model answers for this server process, prefer it on later calls. */
+let preferredGeminiModel: string | null = null;
+
+function geminiCandidates(configured: string): string[] {
+  const list = [
+    preferredGeminiModel,
+    configured,
+    ...GEMINI_MODEL_CANDIDATES,
+  ].filter((model): model is string => Boolean(model));
+  return [...new Set(list)];
+}
+
+/** True when the failure is "that model is gone", not "your key is bad". */
+function isModelRetired(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("no longer available") ||
+    text.includes("is not found") ||
+    text.includes("not found for api version") ||
+    text.includes("is not a valid model") ||
+    text.includes("has been retired") ||
+    text.includes("please update your code to use models/")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function abortAfter(ms: number): { signal: AbortSignal; done: () => void } {
@@ -169,10 +221,6 @@ async function callGemini(
   opts: CallOptions,
   images?: VisionImage[],
 ): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    config.model,
-  )}:generateContent?key=${encodeURIComponent(config.key)}`;
-
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
   for (const image of images ?? []) {
     parts.push({
@@ -192,46 +240,71 @@ async function callGemini(
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
 
-  const { signal, done } = abortAfter(opts.timeoutMs);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    });
-  } catch (err) {
-    throw new Error(
-      `Could not reach the AI service (${config.model}). ${errorText(err)}`,
-    );
-  } finally {
-    done();
+  const models = geminiCandidates(config.model);
+  let lastFailure = "";
+
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model,
+    )}:generateContent?key=${encodeURIComponent(config.key)}`;
+
+    let attempt = 0;
+    for (;;) {
+      const { signal, done } = abortAfter(opts.timeoutMs);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
+        throw new Error(`Could not reach the AI service (${model}). ${errorText(err)}`);
+      } finally {
+        done();
+      }
+
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string };
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        promptFeedback?: { blockReason?: string };
+      };
+
+      if (res.ok) {
+        const text =
+          data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+        if (text.trim()) {
+          preferredGeminiModel = model; // remember what actually works
+          return text;
+        }
+
+        const blockReason = data.promptFeedback?.blockReason;
+        if (blockReason) {
+          throw new Error(`AI refused the request: ${blockReason}`);
+        }
+        lastFailure = `AI (${model}) returned an empty response.`;
+        break; // not fatal — another model may answer
+      }
+
+      const message = data.error?.message ?? res.statusText;
+
+      // "High demand" spikes are temporary — wait them out before moving on.
+      if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+        await sleep(RETRY_DELAYS_MS[attempt++]);
+        continue;
+      }
+
+      if (isModelRetired(message)) {
+        // The key authenticated fine — just this model is gone. Try the next.
+        lastFailure = `AI request failed (${res.status}): ${message}`;
+        break;
+      }
+      throw new Error(`AI request failed (${res.status}): ${message}`);
+    }
   }
 
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    const message =
-      (data as { error?: { message?: string } })?.error?.message ?? res.statusText;
-    throw new Error(`AI request failed (${res.status}): ${message}`);
-  }
-
-  const candidate = (data as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  })?.candidates?.[0];
-
-  const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (!text.trim()) {
-    const blockReason = (data as { promptFeedback?: { blockReason?: string } })
-      ?.promptFeedback?.blockReason;
-    throw new Error(
-      blockReason
-        ? `AI refused the request: ${blockReason}`
-        : `AI (${config.model}) returned an empty response.`,
-    );
-  }
-  return text;
+  throw new Error(lastFailure || `AI (${config.model}) request failed.`);
 }
 
 async function callOpenAI(

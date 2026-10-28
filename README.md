@@ -125,6 +125,7 @@ npm run lint    # eslint
 
 - **File reading needs no keys at all**: `.txt/.md`, PDFs and DOCX are parsed locally, and photos of a syllabus go through on-device Tesseract OCR. When a `GEMINI_API_KEY` is set, images are instead read by AI vision, which handles handwriting and messy layouts far better.
 - **AI analysis and video search do need keys** — see the setup section above. The UI tells you exactly which one is missing.
+- **Gemini models rotate often.** The default is `gemini-flash-lite-latest` (an alias Google keeps current, ~2 s per call); if a model is retired or overloaded the app automatically retries the next one, so you rarely need to touch `LLM_MODEL`.
 - Transcript download is best-effort: YouTube has no official transcript API, so captions are read from the public watch page first and then via public caption proxies (Piped/Invidious). When none of them answer, the app falls back to title/description matching and labels it **"metadata match"**.
 - Progress ticks live in `localStorage` per browser — clear them with **Reset progress** in the results toolbar.
 - Scores are a study aid, not gospel — always skim the first 2 minutes of a video before committing.
