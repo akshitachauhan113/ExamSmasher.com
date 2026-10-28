@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Tesseract OCR language data (auto-downloaded at runtime, ~15 MB)
+*.traineddata
