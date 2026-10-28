@@ -5,6 +5,8 @@ export interface AnalyzeInput {
   subject?: string;
   languageLabel: string;
   maxTopics: number;
+  /** Lower bound for the topic count (defaults to ~70% of maxTopics). */
+  minTopics?: number;
 }
 
 export function buildAnalyzePrompt(input: AnalyzeInput): {
@@ -15,6 +17,8 @@ export function buildAnalyzePrompt(input: AnalyzeInput): {
 You break syllabi into crisp, individually searchable study topics.
 You ALWAYS reply with one valid JSON object and nothing else - no markdown, no commentary.`;
 
+  const minTopics = Math.max(3, Math.round(input.minTopics ?? input.maxTopics * 0.7));
+
   const prompt = `A student submitted the syllabus below. Break it into distinct study topics that can each be matched to ONE great explainer video.
 
 SYLLABUS:
@@ -24,7 +28,7 @@ ${input.syllabus}
 ${input.subject ? `\nDeclared subject/course: ${input.subject}` : ""}
 
 RULES:
-1. Produce at most ${input.maxTopics} topics. If the syllabus is huge, merge tiny sub-points into sensible bigger topics instead of listing hundreds of fragments.
+1. Produce between ${minTopics} and ${input.maxTopics} topics — aim for the upper end whenever the syllabus has many units. EVERY unit/chapter/module in the syllabus must map to at least one topic: a large syllabus produces many topics, never a handful of giant catch-all ones. Only merge genuinely tiny sub-points (two one-liners that belong together); never merge whole units.
 2. Order them the way a student should study them (foundations first).
 3. Each topic must be self-contained and specific - avoid vague titles like "Chapter 2".
 4. "keywords" are the exact words a student would type into YouTube to learn this topic (4-8 keywords). Include technical terms, formulas, theorem names, and common abbreviations.
@@ -130,7 +134,7 @@ export function buildPlanPrompt(input: PlanInput): { system: string; prompt: str
     .join("\n");
 
   const system = `You are an experienced exam mentor who builds realistic, motivating study plans.
-You reply in clean GitHub-flavoured Markdown only - no preamble, no JSON.`;
+You ALWAYS reply with one valid JSON object and nothing else - no markdown fences, no commentary.`;
 
   const prompt = `Create a ${input.totalDays}-day study plan for the course "${input.subject}".
 
@@ -140,13 +144,168 @@ ${topicLines}
 SHORTLISTED VIDEOS (one best video per topic):
 ${pickLines}
 
-FORMAT (Markdown):
-# 📅 ${input.totalDays}-Day Study Plan — ${input.subject}
-**Total video time:** Xh Ym  |  **Daily load:** ~Z min
+RULES:
+1. Distribute the videos across exactly ${input.totalDays} days, foundations first.
+2. Never schedule more than 60 minutes of video per day; add a short "pause and practise" note where useful.
+3. Put a revision / practice-only day near the end.
+4. "videoUrl" must be copied EXACTLY from the shortlist above. Only include videoUrl/videoTitle for items that are videos.
+5. "minutes" = realistic minutes for that one item (rounded to 5).
+6. "focus" = max 12 words for the day's headline.
+7. Final day and the day before it should focus on revision and past-paper practice.
 
-Then a day-by-day table with columns: Day | Topics | Videos (link each title with its URL using [title](url)) | Est. time | Checklist.
-End with a short "Strategy tips" section (5 bullets, exam-focused).
-Keep it practical - never schedule more than 60 minutes of video per day; tell the student to pause and practise.`;
+Return EXACTLY this JSON shape:
+{
+  "days": [
+    {
+      "day": 1,
+      "focus": "One-line headline for the day",
+      "items": [
+        { "title": "What the student does", "minutes": 15, "type": "video", "videoTitle": "Video title", "videoUrl": "https://www.youtube.com/watch?v=..." },
+        { "title": "Pause and practise: solve 5 problems", "minutes": 20, "type": "practice" }
+      ]
+    }
+  ],
+  "tips": ["short exam-focused tip", "another tip"]
+}`;
+
+  return { system, prompt };
+}
+
+/* ------------------------------ notes + cards ------------------------------ */
+
+export interface NotesInput {
+  topic: {
+    title: string;
+    description?: string;
+    chapter?: string;
+    importance?: string;
+    difficulty?: string;
+    keywords?: string[];
+  };
+  subject?: string;
+  /** Optional syllabus excerpt so the notes stay inside the course scope. */
+  syllabus?: string;
+}
+
+export function buildNotesPrompt(input: NotesInput): { system: string; prompt: string } {
+  const system = `You are a senior teacher writing concise, exam-ready study material.
+You ALWAYS reply with one valid JSON object and nothing else - no markdown, no commentary.`;
+
+  const prompt = `Write study notes + flashcards for ONE topic from a student's syllabus.
+
+SUBJECT: ${input.subject || "Not specified"}
+TOPIC: ${input.topic.title}
+${input.topic.description ? `WHAT THE SYLLABUS ASKS: ${input.topic.description}` : ""}
+${input.topic.chapter ? `CHAPTER/UNIT: ${input.topic.chapter}` : ""}
+IMPORTANCE: ${input.topic.importance || "important"} · EXPECTED LEVEL: ${input.topic.difficulty || "intermediate"}
+${input.topic.keywords?.length ? `KEY TERMS: ${input.topic.keywords.join(", ")}` : ""}
+${
+  input.syllabus
+    ? `\nSYLLABUS EXCERPT (keep notes inside this scope):\n"""\n${input.syllabus.slice(0, 2500)}\n"""`
+    : ""
+}
+
+RULES:
+1. "notes" = 2 to 4 sections. Each has a short "heading" and 4-7 "bullets".
+2. Bullets must be SHORT (max ~18 words) but information-dense: definitions, formulas, key steps, dates, exceptions, common mistakes, exam tips.
+3. Write for a student who is revising: plain language, no filler, no "in this section we will...".
+4. "cards" = 6 to 10 flashcards. "q" is a crisp question (definition, formula recall, difference-between, "why"), "a" is the answer in max 25 words.
+5. Use the student's language only for your own wording style; keep technical terms and formulas exactly as the syllabus uses them.
+
+Return EXACTLY this JSON shape:
+{
+  "notes": [
+    { "heading": "Section heading", "bullets": ["short dense point", "another point"] }
+  ],
+  "cards": [
+    { "q": "Question?", "a": "Short answer" }
+  ]
+}`;
+
+  return { system, prompt };
+}
+
+/* ------------------------------ video summary ------------------------------ */
+
+export interface SummaryInput {
+  topicTitle: string;
+  videoTitle: string;
+  videoDescription?: string;
+  /** Transcript excerpt when captions could be downloaded (best case). */
+  transcript?: string;
+}
+
+export function buildSummaryPrompt(input: SummaryInput): { system: string; prompt: string } {
+  const system = `You summarise YouTube explainer videos for students who have not watched them yet.
+You ALWAYS reply with one valid JSON object and nothing else - no markdown, no commentary.`;
+
+  const prompt = `Summarise this video for a student studying: "${input.topicTitle}".
+
+VIDEO TITLE: ${input.videoTitle}
+${input.videoDescription ? `VIDEO DESCRIPTION: ${input.videoDescription.slice(0, 600)}` : ""}
+${
+  input.transcript
+    ? `TRANSCRIPT EXCERPT (authoritative - base the summary on this):\n"""\n${input.transcript.slice(0, 7000)}\n"""`
+    : `No transcript is available. Infer coverage from the title/description only and keep claims safe and general.`
+}
+
+RULES:
+1. "bullets" = 5 to 8 points, in the order the video teaches them, each max ~20 words.
+2. Say what is actually taught: definitions, formulas, worked examples, exam tips.
+3. "fit" = one short line: is this video a good match for the topic and who it suits (beginner / exam revision / advanced).
+4. "level": "beginner" | "intermediate" | "advanced".
+5. No invented timestamps, no view counts, no channel praise.
+
+Return EXACTLY this JSON shape:
+{
+  "bullets": ["point one", "point two"],
+  "fit": "Good match for first-time learners - covers X and Y with examples.",
+  "level": "intermediate"
+}`;
+
+  return { system, prompt };
+}
+
+/* --------------------------------- chat ---------------------------------- */
+
+export interface ChatInput {
+  message: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+  subject?: string;
+  topics?: Array<{ title: string; description?: string }>;
+  syllabus?: string;
+}
+
+export function buildChatPrompt(input: ChatInput): { system: string; prompt: string } {
+  const system = `You are ExamSmasher's study coach - a friendly, sharp exam mentor.
+
+Rules:
+- Mirror the student's language: if they write Hinglish, answer in Hinglish; if English, English; if Hindi, Hindi.
+- Be short and practical. Use bullets or numbered steps when they help. No essays.
+- Ground answers in their syllabus/topics below when the question is about them.
+- Never invent YouTube links, dates, marks or syllabus content you were not given. If you do not know, say so plainly.
+- For study strategy questions, give a concrete next action they can do in the next 30 minutes.`;
+
+  const historyLines = input.history
+    .slice(-10)
+    .map((m) => `${m.role === "user" ? "STUDENT" : "COACH"}: ${m.content.slice(0, 600)}`)
+    .join("\n");
+
+  const prompt = `COURSE: ${input.subject || "Not specified"}
+${input.topics?.length ? `TOPICS EXTRACTED FROM THEIR SYLLABUS:\n${input.topics.map((t, i) => `${i + 1}. ${t.title}${t.description ? ` - ${t.description}` : ""}`).join("\n")}` : ""}
+${
+  input.syllabus
+    ? `\nSYLLABUS EXCERPT:\n"""\n${input.syllabus.slice(0, 3000)}\n"""`
+    : ""
+}
+${historyLines ? `\nRECENT CONVERSATION:\n${historyLines}` : ""}
+
+STUDENT'S LATEST MESSAGE:
+"""
+${input.message}
+"""
+
+Reply to the student now (not JSON, just your answer):`;
 
   return { system, prompt };
 }

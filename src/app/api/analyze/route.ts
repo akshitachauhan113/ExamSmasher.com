@@ -2,8 +2,21 @@ import { generateJSON, getLlmConfig } from "@/lib/llm";
 import { buildAnalyzePrompt } from "@/lib/prompts";
 import type { AnalyzeResponse, Difficulty, Importance, Topic } from "@/lib/types";
 
-const MAX_SYLLABUS_CHARS = 8000;
+const MAX_SYLLABUS_CHARS = 24000;
 const DEFAULT_MAX_TOPICS = 14;
+const MAX_TOPICS = 20;
+
+/**
+ * Bigger syllabus -> proportionally more topics. Without this a whole
+ * semester's syllabus could collapse into a handful of topics and the
+ * student would only ever see a few videos.
+ */
+function autoMaxTopics(syllabus: string): number {
+  const headings = (syllabus.match(/\b(unit|chapter|module|paper|lesson|topic)\b/gi) || []).length;
+  const byLength = Math.ceil(syllabus.length / 500);
+  const byHeadings = Math.ceil(headings * 1.4);
+  return Math.min(MAX_TOPICS, Math.max(6, Math.max(byLength, byHeadings, DEFAULT_MAX_TOPICS - 4)));
+}
 
 interface RawTopic {
   title?: unknown;
@@ -62,7 +75,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const subject = typeof body.subject === "string" ? body.subject.trim().slice(0, 80) : "";
-  const maxTopics = clampInt(body.maxTopics, 3, 20, DEFAULT_MAX_TOPICS);
+  const maxTopics = clampInt(body.maxTopics, 3, MAX_TOPICS, autoMaxTopics(syllabus));
 
   const { system, prompt } = buildAnalyzePrompt({
     syllabus,
@@ -76,7 +89,7 @@ export async function POST(request: Request): Promise<Response> {
     parsed = await generateJSON<{ subject?: string; topics?: RawTopic[] }>(prompt, {
       system,
       temperature: 0.2,
-      maxOutputTokens: 6144,
+      maxOutputTokens: 12_288,
     });
   } catch (err) {
     const message =

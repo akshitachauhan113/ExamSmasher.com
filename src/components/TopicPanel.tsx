@@ -4,6 +4,7 @@ import type { PlayerVideo } from "@/components/VideoPlayerModal";
 import { CheckIcon } from "@/components/Icons";
 import { AlertIcon } from "@/components/Icons";
 import type { Topic, TopicResult } from "@/lib/types";
+import { TopicNotes } from "./TopicNotes";
 import { VideoCard } from "./VideoCard";
 
 const IMPORTANCE_COLOR: Record<string, string> = {
@@ -17,6 +18,11 @@ interface TopicPanelProps {
   index: number;
   result?: TopicResult;
   studied: boolean;
+  /** Course name and syllabus excerpt for the AI notes generator. */
+  subject: string;
+  syllabus: string;
+  /** Language code for transcript-based video summaries. */
+  languageCode: string;
   onToggleStudied: () => void;
   onPlay: (video: PlayerVideo) => void;
 }
@@ -26,6 +32,9 @@ export function TopicPanel({
   index,
   result,
   studied,
+  subject,
+  syllabus,
+  languageCode,
   onToggleStudied,
   onPlay,
 }: TopicPanelProps) {
@@ -142,7 +151,14 @@ export function TopicPanel({
         )}
 
         {result?.videos.map((entry, i) => (
-          <VideoCard key={entry.video.id} entry={entry} index={i} onPlay={onPlay} />
+          <VideoCard
+            key={entry.video.id}
+            entry={entry}
+            index={i}
+            topicTitle={topic.title}
+            languageCode={languageCode}
+            onPlay={onPlay}
+          />
         ))}
 
         {result && !result.error && !result.skipped && result.videos.length > 0 && (
@@ -152,6 +168,9 @@ export function TopicPanel({
             {result.queries.length > 0 && <> · “{result.queries[0]}”</>}
           </p>
         )}
+
+        {/* AI notes + flashcards for this topic, straight from the syllabus */}
+        <TopicNotes topic={topic} subject={subject} syllabus={syllabus} />
       </div>
     </section>
   );

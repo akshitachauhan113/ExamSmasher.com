@@ -77,3 +77,69 @@ export interface HealthResponse {
   llm: "gemini" | "openai" | null;
   model: string | null;
 }
+
+/** Study notes for one topic, generated from the student's own syllabus. */
+export interface NotesSection {
+  heading: string;
+  bullets: string[];
+}
+
+export interface Flashcard {
+  q: string;
+  a: string;
+}
+
+export interface NotesResponse {
+  ok: boolean;
+  notes?: NotesSection[];
+  cards?: Flashcard[];
+  error?: string;
+}
+
+/** AI summary of one video, based on its transcript when available. */
+export interface VideoSummary {
+  bullets: string[];
+  fit?: string;
+  level?: "beginner" | "intermediate" | "advanced";
+}
+
+export interface SummaryResponse {
+  ok: boolean;
+  summary?: VideoSummary;
+  transcriptAvailable?: boolean;
+  error?: string;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatResponse {
+  ok: boolean;
+  reply?: string;
+  error?: string;
+}
+
+/** One planned day in the daily planner. */
+export interface PlanItem {
+  title: string;
+  minutes: number;
+  type?: "video" | "practice" | "revision";
+  videoTitle?: string;
+  videoUrl?: string;
+}
+
+export interface PlanDay {
+  day: number;
+  focus: string;
+  items: PlanItem[];
+}
+
+export interface PlanResponse {
+  ok: boolean;
+  days?: PlanDay[];
+  tips?: string[];
+  markdown?: string;
+  error?: string;
+}

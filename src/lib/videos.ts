@@ -83,27 +83,32 @@ async function runPipeline(
   limit: number,
 ): Promise<TopicResult> {
   // 1. Search with every query variation (parallel, small fan-out).
-  const idLists = await mapWithConcurrency(queries, 2, (query) =>
-    searchYouTube({
-      query,
-      languageCode: language.yt,
-      maxResults: 25,
-      duration: "any",
-    }),
-  );
+  const allQueries = [...queries];
+  const ids = await searchIds(queries, language);
 
-  const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const list of idLists) {
-    for (const id of list) {
-      if (!seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
-      }
+  // 1b. Thin results? Broaden once with plain title queries — a topic panel
+  //     with zero videos is the worst outcome for the student.
+  if (ids.length < limit * 3) {
+    const shortTitle = topic.title.split(/[:\-–—(]/)[0].trim();
+    const broad = [topic.title, `${shortTitle} explained`, `${shortTitle} full tutorial`]
+      .map((q) => q.trim())
+      .filter(
+        (q) =>
+          q.length > 3 &&
+          !allQueries.some((existing) => existing.toLowerCase() === q.toLowerCase()),
+      )
+      .slice(0, 2);
+
+    if (broad.length > 0) {
+      const extra = await searchIds(broad, language);
+      const before = new Set(ids);
+      for (const id of extra) if (!before.has(id)) ids.push(id);
+      allQueries.push(...broad);
     }
   }
+
   if (ids.length === 0) {
-    return { topic, videos: [], candidatesConsidered: 0, queries };
+    return { topic, videos: [], candidatesConsidered: 0, queries: allQueries };
   }
 
   // 2. Pull real statistics + duration + captions flag.
@@ -113,7 +118,7 @@ async function runPipeline(
     .filter((v) => !/\b(shorts?|yt:shorts)\b/i.test(v.title));
 
   if (usable.length === 0) {
-    return { topic, videos: [], candidatesConsidered: 0, queries };
+    return { topic, videos: [], candidatesConsidered: 0, queries: allQueries };
   }
 
   // 3. Cheap metadata pass, so we only download transcripts for the plausible winners.
@@ -155,9 +160,33 @@ async function runPipeline(
     topic,
     videos: finalList.slice(0, limit),
     candidatesConsidered: usable.length,
-    queries,
+    queries: allQueries,
     aiUsed,
   };
+}
+
+/** Runs the search fan-out and flattens the results into unique video ids. */
+async function searchIds(queries: string[], language: LanguageOption): Promise<string[]> {
+  const idLists = await mapWithConcurrency(queries, 2, (query) =>
+    searchYouTube({
+      query,
+      languageCode: language.yt,
+      maxResults: 25,
+      duration: "any",
+    }),
+  );
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const list of idLists) {
+    for (const id of list) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  }
+  return ids;
 }
 
 async function fetchTranscriptsFor(

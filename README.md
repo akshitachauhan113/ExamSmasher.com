@@ -12,14 +12,19 @@ Syllabus text  →  AI splits it into topics  →  YouTube search per topic
 
 - **🔑 In-app API key setup** — a Settings panel where you paste a key, hit **Test** (it validates against the real API and says *why* if something's off), and **Save**. Keys land in the git-ignored `.env.local` and apply instantly — no file editing, no restart.
 - **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or a **photo of your syllabus**; the server reads it and fills the syllabus box. PDFs/docx are parsed locally, photos are read by **on-device OCR (works with zero API keys)** — and upgraded to AI vision automatically when a Gemini key is present.
-- **AI syllabus breakdown** — chapters become crisp, searchable study topics with importance, difficulty and estimated time.
+- **AI syllabus breakdown** — chapters become crisp, searchable study topics with importance, difficulty and estimated time. Bigger syllabi automatically produce **more topics** (up to 20), so a whole semester never collapses into a handful of videos.
 - **Real content matching** — not just the title: captions/transcripts are downloaded for the top candidates and checked against the topic's keywords, then an AI reads the excerpts and scores each video.
+- **🤖 Per-video AI summary** — "Summarise this video" on any card reads the actual transcript and lists what that video really teaches (and warns you when it *doesn't* match the topic), so you never waste 20 minutes on the wrong video.
+- **📝 Notes & flashcards per topic** — generate short, dense bullet-point notes (definitions, formulas, common mistakes, exam tips) plus 6–14 flip flashcards, written from *your* syllabus. Saved in the browser.
+- **🗓️ Daily planner** — the AI plan arrives as interactive day cards with checkboxes and a progress bar; tick items as you go. A Markdown version is still there for copy/export.
+- **✅ To-do list** — your own tasks ("Solve 2023 paper", "Revise Unit 3") with a progress bar, saved on your device.
+- **💬 AI study coach (chat)** — floating chat that knows your subject, your extracted topics and your syllabus. Ask doubts in Hinglish/English/Hindi — it mirrors your language and gives concrete next actions.
 - **▶️ Watch inside the app** — clicking a video opens an embedded player right there; "Open on YouTube" is one click away.
 - **✅ Checklist tracking** — tick topics as you study them. The sidebar shows "syllabus covered X%", how many topics are left and the remaining watch time. Progress is saved in your browser.
 - **"Already studied" awareness** — topics you tick are skipped on re-match (no wasted API quota), excluded from the AI study plan and marked in exports.
 - **Transparent scoring** — every video shows a 0–100 score, a reason chip ("Covers 5/5 keywords", "Transcript confirms the topic", "Trusted educator: Khan Academy") and an AI one-line summary.
 - **16 languages** — English, **Hinglish (default)**, Hindi, Urdu, Bengali, Tamil, Telugu, Spanish, French, German, Portuguese, Arabic, Japanese, Chinese, Russian, Turkish.
-- **Study tools** — copy the list, export Markdown or CSV, and generate a day-by-day AI study plan with your top-picked videos.
+- **Study tools** — copy the list, export Markdown or CSV.
 - **Light / dark theme**, fully responsive.
 
 ## Setup (about 5 minutes — both keys are FREE)

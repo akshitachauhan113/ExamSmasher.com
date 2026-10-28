@@ -11,7 +11,7 @@ import { generateVisionText, getLlmConfig } from "@/lib/llm";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
 const MAX_FILES = 4;
-const MAX_TEXT_CHARS = 8000;
+const MAX_TEXT_CHARS = 24000;
 
 interface ExtractResponse {
   ok: boolean;

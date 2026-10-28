@@ -167,3 +167,34 @@ export const KeyIcon = (p: IconProps) => (
     <path d="M14 9l2.5 2.5" />
   </svg>
 );
+
+export const ChatIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z" />
+  </svg>
+);
+
+export const ListIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
+  </svg>
+);
+
+export const SendIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 12l16-7-7 16-2.5-6.5L4 12z" />
+  </svg>
+);
+
+export const TrashIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+  </svg>
+);
+
+export const PlusIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);

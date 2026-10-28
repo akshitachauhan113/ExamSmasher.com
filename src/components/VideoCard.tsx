@@ -4,6 +4,7 @@
 import { formatDuration, formatViews, videoUrl } from "@/lib/format";
 import type { ScoredVideo } from "@/lib/types";
 import { BotIcon, CheckIcon, ClockIcon, CrownIcon, ExternalIcon } from "./Icons";
+import { VideoSummaryBox } from "./VideoSummaryBox";
 
 function scoreColor(score: number): string {
   if (score >= 85) return "var(--good)";
@@ -15,11 +16,15 @@ function scoreColor(score: number): string {
 interface VideoCardProps {
   entry: ScoredVideo;
   index: number;
+  /** Parent topic title — grounds the AI summary in what the student needs. */
+  topicTitle: string;
+  /** Language code for transcript fetches (summary generation). */
+  languageCode: string;
   /** Opens the in-app player instead of leaving for YouTube. */
   onPlay: (video: { id: string; title: string; channelTitle: string }) => void;
 }
 
-export function VideoCard({ entry, index, onPlay }: VideoCardProps) {
+export function VideoCard({ entry, index, topicTitle, languageCode, onPlay }: VideoCardProps) {
   const { video, score } = entry;
   const url = videoUrl(video.id);
   const year = video.publishedAt ? new Date(video.publishedAt).getFullYear() : null;
@@ -186,6 +191,14 @@ export function VideoCard({ entry, index, onPlay }: VideoCardProps) {
               </p>
             </details>
           )}
+
+          {/* AI summary of what this video actually teaches */}
+          <VideoSummaryBox
+            videoId={video.id}
+            videoTitle={video.title}
+            topicTitle={topicTitle}
+            languageCode={languageCode}
+          />
         </div>
       </div>
     </article>

@@ -25,7 +25,7 @@ interface SyllabusFormProps {
   error: string | null;
 }
 
-const MAX_CHARS = 8000;
+const MAX_CHARS = 24000;
 
 export function SyllabusForm(props: SyllabusFormProps) {
   const {

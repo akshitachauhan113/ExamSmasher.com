@@ -10,6 +10,7 @@ interface TopicSidebarProps {
   onJump: (id: string) => void;
   phase: "idle" | "analyzing" | "matching" | "done";
   completed: number;
+  videoCount: number;
   studiedCount: number;
   isStudied: (title: string) => boolean;
   onToggleStudied: (title: string) => void;
@@ -28,6 +29,7 @@ export function TopicSidebar({
   onJump,
   phase,
   completed,
+  videoCount,
   studiedCount,
   isStudied,
   onToggleStudied,
@@ -38,11 +40,16 @@ export function TopicSidebar({
   return (
     <aside className="lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1">
       <div className="card p-4">
-        <div className="flex items-baseline justify-between">
+        <div className="flex items-start justify-between gap-3">
           <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wide text-[var(--muted)]">
             <BookIcon width={16} height={16} /> Topics found
           </h3>
-          <span className="text-sm font-bold">{topics.length}</span>
+          <div className="text-right leading-tight">
+            <span className="block text-sm font-bold">{topics.length} topics</span>
+            <span className="block text-[0.68rem] font-semibold" style={{ color: "var(--brand)" }}>
+              {videoCount} videos matched
+            </span>
+          </div>
         </div>
 
         {/* Study progress — how much of the syllabus is done */}

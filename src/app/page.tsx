@@ -10,15 +10,18 @@ import {
   DownloadIcon,
   GraduationIcon,
   KeyIcon,
+  ListIcon,
   PlayIcon,
   RefreshIcon,
   SparklesIcon,
 } from "@/components/Icons";
+import { ChatWidget } from "@/components/ChatWidget";
 import { SetupBanner } from "@/components/SetupBanner";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
 import { KeysModal } from "@/components/KeysModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { TodoPanel } from "@/components/TodoPanel";
 import { TopicPanel } from "@/components/TopicPanel";
 import { TopicSidebar } from "@/components/TopicSidebar";
 import { VideoPlayerModal, type PlayerVideo } from "@/components/VideoPlayerModal";
@@ -34,6 +37,7 @@ import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
 import type {
   AnalyzeResponse,
   HealthResponse,
+  PlanResponse,
   Topic,
   TopicResult,
   VideosResponse,
@@ -44,7 +48,7 @@ type Phase = "idle" | "analyzing" | "matching" | "done";
 interface PlanState {
   open: boolean;
   loading: boolean;
-  markdown: string | null;
+  plan: PlanResponse | null;
   error: string | null;
 }
 
@@ -80,9 +84,10 @@ export default function Home() {
   const [plan, setPlan] = useState<PlanState>({
     open: false,
     loading: false,
-    markdown: null,
+    plan: null,
     error: null,
   });
+  const [todoOpen, setTodoOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -204,8 +209,8 @@ export default function Home() {
       setFormError("Paste at least a few lines of your syllabus so topics can be extracted.");
       return;
     }
-    if (syllabus.length > 8000) {
-      setFormError("Syllabus is too long — trim it under 8,000 characters.");
+    if (syllabus.length > 24000) {
+      setFormError("Syllabus is too long — trim it under 24,000 characters.");
       return;
     }
 
@@ -414,7 +419,7 @@ export default function Home() {
       return;
     }
 
-    setPlan({ open: true, loading: true, markdown: null, error: null });
+    setPlan({ open: true, loading: true, plan: null, error: null });
     const totalDays = Math.max(3, Math.min(30, Math.ceil(picks.length * 0.8)));
 
     try {
@@ -432,14 +437,14 @@ export default function Home() {
           totalDays,
         }),
       });
-      const data = await response.json();
-      if (!data.ok) throw new Error(data.error || "Could not build the study plan.");
-      setPlan({ open: true, loading: false, markdown: data.markdown, error: null });
+      const data: PlanResponse = await response.json();
+      if (!data.ok || !data.days) throw new Error(data.error || "Could not build the study plan.");
+      setPlan({ open: true, loading: false, plan: data, error: null });
     } catch (err) {
       setPlan({
         open: true,
         loading: false,
-        markdown: null,
+        plan: null,
         error: err instanceof Error ? err.message : "Could not build the study plan.",
       });
     }
@@ -575,6 +580,7 @@ export default function Home() {
                 <Stat label="Subject" value={subjectName || "Your course"} />
                 <Stat label="Topics" value={String(topics.length)} />
                 <Stat label="Matched" value={`${matchedTopics}/${topics.length}`} />
+                <Stat label="Videos" value={String(videoCount)} />
                 <Stat
                   label="Studied"
                   value={`${studiedCount}/${topics.length}`}
@@ -587,6 +593,14 @@ export default function Home() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTodoOpen(true)}
+                  className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
+                  title="Your personal to-do list"
+                >
+                  <ListIcon width={14} height={14} /> To-do
+                </button>
                 {studiedCount > 0 && (
                   <button
                     type="button"
@@ -652,6 +666,7 @@ export default function Home() {
                 onJump={jumpTo}
                 phase={phase}
                 completed={completed}
+                videoCount={videoCount}
                 studiedCount={studiedCount}
                 isStudied={isStudied}
                 onToggleStudied={handleToggleStudied}
@@ -665,6 +680,9 @@ export default function Home() {
                     index={index}
                     result={results[topic.id]}
                     studied={isStudied(topic.title)}
+                    subject={subjectName}
+                    syllabus={syllabus}
+                    languageCode={language}
                     onToggleStudied={() => handleToggleStudied(topic.title)}
                     onPlay={setPlayer}
                   />
@@ -708,13 +726,21 @@ export default function Home() {
       <StudyPlanModal
         open={plan.open}
         loading={plan.loading}
-        markdown={plan.markdown}
+        plan={plan.plan}
         error={plan.error}
         onClose={() => setPlan((p) => ({ ...p, open: false }))}
         onRegenerate={generatePlan}
       />
 
       <VideoPlayerModal video={player} onClose={() => setPlayer(null)} />
+
+      <TodoPanel open={todoOpen} onClose={() => setTodoOpen(false)} />
+
+      <ChatWidget
+        subject={subjectName}
+        topics={topics}
+        syllabus={syllabus.slice(0, 3000)}
+      />
 
       <KeysModal
         open={keysOpen}
