@@ -10,7 +10,7 @@ Syllabus text  →  AI splits it into topics  →  YouTube search per topic
 
 ## Features
 
-- **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or even a **photo of your syllabus**; the server reads it and fills the syllabus box. PDFs/docx are parsed locally, images are transcribed by the AI.
+- **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or a **photo of your syllabus**; the server reads it and fills the syllabus box. PDFs/docx are parsed locally, photos are read by **on-device OCR (works with zero API keys)** — and upgraded to AI vision automatically when a Gemini key is present.
 - **AI syllabus breakdown** — chapters become crisp, searchable study topics with importance, difficulty and estimated time.
 - **Real content matching** — not just the title: captions/transcripts are downloaded for the top candidates and checked against the topic's keywords, then an AI reads the excerpts and scores each video.
 - **▶️ Watch inside the app** — clicking a video opens an embedded player right there; "Open on YouTube" is one click away.
@@ -112,7 +112,8 @@ npm run lint    # eslint
 
 ## Notes & limits
 
-- **Images need an AI key** (Gemini reads the photo). PDFs and DOCX files are parsed locally, so they work without one.
+- **File reading needs no keys at all**: `.txt/.md`, PDFs and DOCX are parsed locally, and photos of a syllabus go through on-device Tesseract OCR. When a `GEMINI_API_KEY` is set, images are instead read by AI vision, which handles handwriting and messy layouts far better.
+- **AI analysis and video search do need keys** — see the setup section above. The UI tells you exactly which one is missing.
 - Transcript download is best-effort: YouTube has no official transcript API, so captions are read from the public watch page first and then via public caption proxies (Piped/Invidious). When none of them answer, the app falls back to title/description matching and labels it **"metadata match"**.
 - Progress ticks live in `localStorage` per browser — clear them with **Reset progress** in the results toolbar.
 - Scores are a study aid, not gospel — always skim the first 2 minutes of a video before committing.

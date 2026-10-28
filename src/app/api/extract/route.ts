@@ -16,7 +16,7 @@ const MAX_TEXT_CHARS = 8000;
 interface ExtractResponse {
   ok: boolean;
   text?: string;
-  method?: "direct" | "pdf" | "docx" | "vision";
+  method?: "direct" | "pdf" | "docx" | "vision" | "ocr";
   fileName?: string;
   pageCount?: number;
   truncated?: boolean;
@@ -77,7 +77,7 @@ export async function POST(request: Request): Promise<Response> {
           {
             ok: false,
             error:
-              "This PDF has no selectable text (it is probably a scan). Upload a photo of it instead — the AI can read images.",
+              "This PDF has no selectable text (it is a scan). Export its pages as photos and upload those — images are read automatically, no AI key needed.",
           },
           { status: 422 },
         );
@@ -96,25 +96,37 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     // ---- images (photo of a syllabus) -------------------------------------
+    // AI vision reads it best; without an AI key we fall back to on-device
+    // OCR (tesseract.js) so photos still work with zero keys configured.
     if (files.every((f) => f.type.startsWith("image/"))) {
-      if (!getLlmConfig()) {
-        return Response.json(
-          {
-            ok: false,
-            error:
-              "Reading images needs an AI key. Add GEMINI_API_KEY to .env.local, or upload a .txt/.pdf file instead.",
-          },
-          { status: 401 },
-        );
-      }
-
       const images = files.map((f, index) => ({
         mimeType: f.type || "image/jpeg",
         base64: buffers[index].toString("base64"),
       }));
 
-      const text = await readImagesAsText(images);
-      return respond(text, "vision", primary.name, files.length);
+      let visionError: unknown = null;
+      if (getLlmConfig()) {
+        try {
+          const text = await readImagesAsText(images);
+          return respond(text, "vision", primary.name, files.length);
+        } catch (err) {
+          visionError = err;
+        }
+      }
+
+      try {
+        const text = await ocrImages(buffers);
+        return respond(text, "ocr", primary.name, files.length);
+      } catch (ocrError) {
+        // Report the more specific failure when we have one.
+        const detail =
+          visionError instanceof Error
+            ? visionError.message
+            : ocrError instanceof Error
+              ? ocrError.message
+              : "Could not read the image.";
+        return Response.json({ ok: false, error: detail }, { status: 422 });
+      }
     }
 
     return Response.json(
@@ -194,4 +206,26 @@ If the images are unreadable, blurry beyond recognition, or clearly not a syllab
     );
   }
   return cleaned;
+}
+
+/**
+ * Reads text straight off an image with Tesseract OCR. Runs entirely on this
+ * machine — no API key, no quota, no data leaves the server except the
+ * language model download on first use (~15 MB, cached afterwards).
+ */
+async function ocrImages(buffers: Buffer[]): Promise<string> {
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("eng");
+
+  try {
+    const pages: string[] = [];
+    for (const buffer of buffers) {
+      const { data } = await worker.recognize(buffer);
+      const page = (data.text ?? "").replace(/\u0000/g, "").trim();
+      if (page) pages.push(page);
+    }
+    return pages.join("\n\n");
+  } finally {
+    await worker.terminate().catch(() => undefined);
+  }
 }

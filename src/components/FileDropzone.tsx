@@ -50,7 +50,9 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
       const label =
         data.method === "vision"
           ? `${list[0].name} (read by AI from image)`
-          : list[0].name;
+          : data.method === "ocr"
+            ? `${list[0].name} (read via OCR from image)`
+            : list[0].name;
 
       setLoadedFile(label);
       onExtracted(data.text, label);
@@ -101,7 +103,7 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
             <p className="truncate text-xs text-[var(--muted)]">
               {loadedFile
                 ? `Loaded: ${loadedFile}`
-                : "PDF · DOCX · TXT/MD · ya syllabus ki photo (AI padh lega)"}
+                : "PDF · DOCX · TXT/MD · ya syllabus ki photo (bina key ke padh lega)"}
             </p>
           </div>
         </div>
