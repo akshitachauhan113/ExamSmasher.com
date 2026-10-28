@@ -158,3 +158,12 @@ export const UploadIcon = (p: IconProps) => (
     <path d="M4 20h16" />
   </svg>
 );
+
+export const KeyIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="8" cy="15" r="4" />
+    <path d="M10.8 12.2L20 3" />
+    <path d="M16.5 6.5l2.5 2.5" />
+    <path d="M14 9l2.5 2.5" />
+  </svg>
+);

@@ -2,13 +2,19 @@
 
 import { useState } from "react";
 import type { HealthResponse } from "@/lib/types";
-import { AlertIcon, CloseIcon } from "./Icons";
+import { AlertIcon, CloseIcon, KeyIcon } from "./Icons";
 
 /**
  * Shown while API keys are missing so the app explains itself
  * instead of failing with a raw 401 later.
  */
-export function SetupBanner({ health }: { health: HealthResponse }) {
+export function SetupBanner({
+  health,
+  onOpenKeys,
+}: {
+  health: HealthResponse;
+  onOpenKeys: () => void;
+}) {
   const [dismissed, setDismissed] = useState(false);
 
   const missing: string[] = [];
@@ -34,6 +40,14 @@ export function SetupBanner({ health }: { health: HealthResponse }) {
         <p className="mt-1 text-[var(--muted)]">
           Missing: <code className="font-mono text-[0.8em]">{missing.join(", ")}</code>
         </p>
+
+        <button
+          type="button"
+          onClick={onOpenKeys}
+          className="btn-primary mt-3 flex items-center gap-2 px-4 py-2.5 text-sm"
+        >
+          <KeyIcon width={15} height={15} /> Open API Keys panel
+        </button>
 
         <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-[var(--muted)]">
           <li>
@@ -62,16 +76,12 @@ export function SetupBanner({ health }: { health: HealthResponse }) {
             </a>
             .
           </li>
-          <li>
-            Paste both into a <code className="font-mono text-[0.8em]">.env.local</code> file in
-            the project root, then restart the server (<code className="font-mono text-[0.8em]">npm run dev</code>).
-          </li>
         </ol>
 
-        <pre className="mt-3 overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 font-mono text-[0.78rem] leading-relaxed">
-{`YOUTUBE_API_KEY=your_youtube_key_here
-GEMINI_API_KEY=your_gemini_key_here`}
-        </pre>
+        <p className="mt-3 text-xs">
+          Paste both in the panel above — no file editing needed. Saving works instantly (no
+          restart).
+        </p>
       </div>
 
       <button

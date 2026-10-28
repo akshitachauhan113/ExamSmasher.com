@@ -9,12 +9,14 @@ import {
   CopyIcon,
   DownloadIcon,
   GraduationIcon,
+  KeyIcon,
   PlayIcon,
   RefreshIcon,
   SparklesIcon,
 } from "@/components/Icons";
 import { SetupBanner } from "@/components/SetupBanner";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
+import { KeysModal } from "@/components/KeysModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { TopicPanel } from "@/components/TopicPanel";
@@ -49,12 +51,16 @@ interface PlanState {
 export default function Home() {
   /* ------------------------------- setup ------------------------------- */
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  useEffect(() => {
+  const [keysOpen, setKeysOpen] = useState(false);
+  const refreshHealth = useCallback(() => {
     fetch("/api/health")
       .then((r) => r.json())
       .then((data: HealthResponse) => setHealth(data))
       .catch(() => setHealth(null));
   }, []);
+  useEffect(() => {
+    refreshHealth();
+  }, [refreshHealth]);
 
   /* -------------------------------- form -------------------------------- */
   const [syllabus, setSyllabus] = useState("");
@@ -466,13 +472,30 @@ export default function Home() {
                 {health.youtube ? " · YouTube ✓" : " · YouTube ✗"}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setKeysOpen(true)}
+              className="btn-ghost flex items-center gap-1.5 px-2.5 py-1.5 text-xs"
+              style={
+                health && (!health.llm || !health.youtube)
+                  ? {
+                      borderColor: "color-mix(in srgb, var(--warn) 55%, var(--line))",
+                      color: "var(--warn)",
+                    }
+                  : undefined
+              }
+              title="Add or change API keys"
+            >
+              <KeyIcon width={14} height={14} />
+              <span className="hidden sm:inline">API Keys</span>
+            </button>
             <ThemeToggle />
           </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-20 pt-8 sm:px-6">
-        {health && <SetupBanner health={health} />}
+        {health && <SetupBanner health={health} onOpenKeys={() => setKeysOpen(true)} />}
 
         {/* Hero — only before the first analysis */}
         {phase === "idle" && topics.length === 0 && (
@@ -692,6 +715,16 @@ export default function Home() {
       />
 
       <VideoPlayerModal video={player} onClose={() => setPlayer(null)} />
+
+      <KeysModal
+        open={keysOpen}
+        health={health}
+        onClose={() => setKeysOpen(false)}
+        onSaved={() => {
+          refreshHealth();
+          notify("Keys save ho gayi ✅ — ab Analyse karke dekh!");
+        }}
+      />
 
       {toast && (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2">

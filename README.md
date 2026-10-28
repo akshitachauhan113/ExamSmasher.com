@@ -10,6 +10,7 @@ Syllabus text  →  AI splits it into topics  →  YouTube search per topic
 
 ## Features
 
+- **🔑 In-app API key setup** — a Settings panel where you paste a key, hit **Test** (it validates against the real API and says *why* if something's off), and **Save**. Keys land in the git-ignored `.env.local` and apply instantly — no file editing, no restart.
 - **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or a **photo of your syllabus**; the server reads it and fills the syllabus box. PDFs/docx are parsed locally, photos are read by **on-device OCR (works with zero API keys)** — and upgraded to AI vision automatically when a Gemini key is present.
 - **AI syllabus breakdown** — chapters become crisp, searchable study topics with importance, difficulty and estimated time.
 - **Real content matching** — not just the title: captions/transcripts are downloaded for the top candidates and checked against the topic's keywords, then an AI reads the excerpts and scores each video.
@@ -44,18 +45,27 @@ Open http://localhost:3000
 2. **Create API key** → copy it.
    *(Prefer OpenAI? Set `OPENAI_API_KEY` instead and leave Gemini empty.)*
 
-### 4. Add both keys
+### 4. Add both keys — easiest way is inside the app
 
-Copy `.env.example` to `.env.local` and fill it in:
+**Option A (recommended): use the in-app panel**
+
+1. Start the dev server and open http://localhost:3000
+2. Click **API Keys** in the header (or the button on the yellow setup banner)
+3. Paste each key → **Test** to verify it → **Save keys**
+
+The keys are written to `.env.local` for you and take effect immediately — no restart, no file editing. **Test** calls the real API and explains exactly what is wrong (invalid key, API not enabled, quota exhausted).
+
+**Option B: edit the file yourself**
 
 ```bash
 YOUTUBE_API_KEY=your_youtube_key
 GEMINI_API_KEY=your_gemini_key
 ```
 
-Restart the dev server. The header chip will show `AI: gemini · YouTube ✓`.
+in `.env.local`, then restart the dev server. The header chip will show `AI: gemini · YouTube ✓`.
 
-> The app also tells you exactly this on a banner if a key is missing — nothing fails silently.
+> Both keys stay on your machine: `.env.local` is git-ignored and is never committed.
+> Nothing fails silently — a banner tells you exactly which key is missing.
 
 ## How the ranking works
 
@@ -81,8 +91,9 @@ src/
       extract/route.ts     uploaded file → syllabus text (pdf/docx/image)
       videos/route.ts      topic    → ranked videos (YouTube + AI)
       plan/route.ts        topics   → markdown study plan (AI)
+      keys/route.ts        save + validate API keys (dev only, whitelisted)
       health/route.ts      key status for the setup banner
-  components/              Form, dropzone, sidebar, topic panels, player, modal
+  components/              Form, dropzone, sidebar, topic panels, player, key setup, modal
   hooks/
     useStudiedTopics.ts    localStorage-backed "topics I have studied" store
   lib/
