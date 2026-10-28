@@ -1,0 +1,289 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --color-accent: var(--accent);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-gold: var(--gold);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --bg: #f5f6fb;
+  --surface: #ffffff;
+  --surface-2: #f0f2f9;
+  --line: #e3e7f1;
+  --text: #0d1220;
+  --muted: #5d6883;
+  --brand: #4f46e5;
+  --brand-2: #9333ea;
+  --accent: #0891b2;
+  --good: #0f9d58;
+  --warn: #d97706;
+  --bad: #dc2626;
+  --gold: #f59e0b;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -12px rgba(16, 24, 40, 0.14);
+}
+
+[data-theme="dark"] {
+  --bg: #080b14;
+  --surface: #0f1424;
+  --surface-2: #161c30;
+  --line: #232b42;
+  --text: #e9edf8;
+  --muted: #97a2bd;
+  --brand: #6d63ff;
+  --brand-2: #b16bff;
+  --accent: #22d3ee;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --gold: #fbbf24;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -16px rgba(0, 0, 0, 0.8);
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 96px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+/* ---------- Reusable pieces ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: linear-gradient(120deg, var(--brand), var(--brand-2));
+  color: #fff;
+  border-radius: 14px;
+  font-weight: 700;
+  transition: filter 0.18s ease, transform 0.18s ease;
+  box-shadow: 0 10px 26px -12px color-mix(in srgb, var(--brand) 85%, transparent);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 12px;
+  font-weight: 600;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--line));
+}
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 16%, transparent);
+}
+.field::placeholder {
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+}
+
+.gradient-text {
+  background: linear-gradient(100deg, var(--brand), var(--brand-2) 55%, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------- Animations ---------- */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--text) 7%, transparent),
+    transparent
+  );
+  animation: shimmer 1.4s infinite;
+}
+
+/* ---------- Scrollbars ---------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 65%, transparent);
+  background-clip: padding-box;
+}
+
+/* ---------- Study-plan markdown output ---------- */
+
+.plan-markdown {
+  font-size: 0.94rem;
+  line-height: 1.7;
+}
+.plan-markdown h1 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin: 0.2rem 0 0.8rem;
+}
+.plan-markdown h2 {
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin: 1.3rem 0 0.5rem;
+}
+.plan-markdown h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 1rem 0 0.4rem;
+}
+.plan-markdown p {
+  margin: 0.55rem 0;
+  color: var(--muted);
+}
+.plan-markdown strong {
+  color: var(--text);
+}
+.plan-markdown ul,
+.plan-markdown ol {
+  margin: 0.5rem 0 0.9rem 1.2rem;
+}
+.plan-markdown ul {
+  list-style: disc;
+}
+.plan-markdown ol {
+  list-style: decimal;
+}
+.plan-markdown li {
+  margin: 0.25rem 0;
+  color: var(--muted);
+}
+.plan-markdown a {
+  color: var(--brand);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.plan-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.7rem 0;
+  font-size: 0.86rem;
+}
+.plan-markdown th,
+.plan-markdown td {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.plan-markdown th {
+  background: var(--surface-2);
+  font-weight: 700;
+}
+.plan-markdown code {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.82em;
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 0.08rem 0.3rem;
+}
+.plan-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1rem 0;
+}
