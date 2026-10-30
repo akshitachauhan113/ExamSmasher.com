@@ -6,11 +6,41 @@ const UA =
 
 export class YouTubeError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** True when the daily API quota is what stopped us. */
+  quota: boolean;
+  constructor(message: string, status: number, quota = false) {
     super(message);
     this.status = status;
+    this.quota = quota;
     this.name = "YouTubeError";
   }
+}
+
+/**
+ * YouTube's daily quota resets at midnight Pacific. Remembering that we are
+ * out stops us burning a second, third and fourth 400-unit search fan-out on
+ * topics that are doomed to fail anyway — and lets the UI say plainly which
+ * parts of the syllabus could NOT be covered, instead of showing 27 silent
+ * empty panels.
+ */
+const QUOTA_RESET_MS = 1000 * 60 * 60 * 6; // retry after 6h; resets at PT midnight
+let quotaExhaustedUntil = 0;
+
+export function isQuotaExhausted(): boolean {
+  return Date.now() < quotaExhaustedUntil;
+}
+
+function markQuotaExhausted(): void {
+  quotaExhaustedUntil = Date.now() + QUOTA_RESET_MS;
+}
+
+export const QUOTA_MESSAGE =
+  "YouTube ka daily API quota khatam ho gaya — videos aaj aur nahi milenge (reset: PT midnight). " +
+  "Neeche dekh kaunse topics reh gaye, unhe notes se khud padh lo.";
+
+/** Call before every search fan-out so we fail fast instead of failing loudly. */
+export function assertQuotaAvailable(): void {
+  if (isQuotaExhausted()) throw new YouTubeError(QUOTA_MESSAGE, 403, true);
 }
 
 function apiKey(): string {
@@ -82,11 +112,16 @@ export async function searchYouTube(options: SearchOptions): Promise<string[]> {
 
   if (!res.ok) {
     const reason = (
-      data as { error?: { message?: string } }
+      data as { error?: { message?: string; errors?: Array<{ reason?: string }> } }
     )?.error;
+    const quota = isQuotaError(res.status, reason);
+    if (quota) markQuotaExhausted();
     throw new YouTubeError(
-      reason?.message ?? `YouTube API error (${res.status})`,
+      quota
+        ? QUOTA_MESSAGE
+        : (reason?.message ?? `YouTube API error (${res.status})`),
       res.status,
+      quota,
     );
   }
 
@@ -94,6 +129,20 @@ export async function searchYouTube(options: SearchOptions): Promise<string[]> {
   return items
     .map((i) => i.id?.videoId)
     .filter((id): id is string => Boolean(id));
+}
+
+/** quotaExceeded / dailyLimitExceeded both mean: stop spending, report honestly. */
+function isQuotaError(
+  status: number,
+  reason: { message?: string; errors?: Array<{ reason?: string }> } | undefined,
+): boolean {
+  if (status === 403) {
+    const code = reason?.errors?.[0]?.reason ?? "";
+    if (/quota/i.test(code) || /quota/i.test(reason?.message ?? "")) return true;
+    // A 403 with no discernible reason is almost always the daily quota.
+    if (!code) return true;
+  }
+  return /quota|daily limit/i.test(reason?.message ?? "");
 }
 
 /** Fetches rich metadata (stats, duration, captions flag) for up to 50 videos. */
@@ -129,8 +178,15 @@ export async function fetchVideoDetails(ids: string[]): Promise<VideoCandidate[]
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = (data as { error?: { message?: string } })?.error?.message;
-    throw new YouTubeError(message ?? `YouTube API error (${res.status})`, res.status);
+    const err = (data as { error?: { message?: string; errors?: Array<{ reason?: string }> } })
+      .error;
+    const quota = isQuotaError(res.status, err);
+    if (quota) markQuotaExhausted();
+    throw new YouTubeError(
+      quota ? QUOTA_MESSAGE : (err?.message ?? `YouTube API error (${res.status})`),
+      res.status,
+      quota,
+    );
   }
 
   const items =
