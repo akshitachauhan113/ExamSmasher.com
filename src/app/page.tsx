@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  BookIcon,
   CalendarIcon,
   CheckIcon,
   CopyIcon,
@@ -11,11 +10,11 @@ import {
   GraduationIcon,
   KeyIcon,
   ListIcon,
-  PlayIcon,
   RefreshIcon,
-  SparklesIcon,
 } from "@/components/Icons";
 import { ChatWidget } from "@/components/ChatWidget";
+import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
+import { PlaylistBanner } from "@/components/PlaylistBanner";
 import { SetupBanner } from "@/components/SetupBanner";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
 import { KeysModal } from "@/components/KeysModal";
@@ -33,11 +32,17 @@ import {
   downloadFile,
 } from "@/lib/exporters";
 import { formatMinutes, videoUrl } from "@/lib/format";
+import { coverageMap } from "@/lib/playlists";
 import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
 import type {
   AnalyzeResponse,
+  CoursePlaylist,
+  ExamPlanResponse,
+  ExamTopic,
   HealthResponse,
   PlanResponse,
+  PlaylistResponse,
+  PyqQuestion,
   Topic,
   TopicResult,
   VideosResponse,
@@ -81,6 +86,17 @@ export default function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [player, setPlayer] = useState<PlayerVideo | null>(null);
+  /** The verified full-course playlist covering the biggest share of syllabus. */
+  const [playlist, setPlaylist] = useState<CoursePlaylist | null>(null);
+  const [playlistLoading, setPlaylistLoading] = useState(false);
+  /** Exam Mode output — priority plan built from the student's real papers.
+   *  Held in the page so a re-analysis does not wipe uploaded papers. */
+  const [exam, setExamState] = useState<ExamState>(EMPTY_EXAM_STATE);
+
+  /** Partial-update helper so ExamMode can patch one field without the rest. */
+  const setExam = useCallback((patch: Partial<ExamState>) => {
+    setExamState((prev) => ({ ...prev, ...patch }));
+  }, []);
   const [plan, setPlan] = useState<PlanState>({
     open: false,
     loading: false,
@@ -117,6 +133,16 @@ export default function Home() {
     () => topics.filter((t) => (results[t.id]?.videos?.length ?? 0) > 0).length,
     [topics, results],
   );
+  /**
+   * Honest syllabus coverage: a topic only counts as covered when it has a
+   * video we would actually recommend (top score >= 55). A panel where search
+   * technically returned something weak is not real coverage.
+   */
+  const coveragePercent = useMemo(() => {
+    if (topics.length === 0) return 0;
+    const covered = topics.filter((t) => (results[t.id]?.videos?.[0]?.score ?? 0) >= 55).length;
+    return Math.round((covered / topics.length) * 100);
+  }, [topics, results]);
   const videoCount = useMemo(
     () => Object.values(results).reduce((sum, r) => sum + r.videos.length, 0),
     [results],
@@ -132,6 +158,49 @@ export default function Home() {
   const allStudied = topics.length > 0 && studiedCount === topics.length;
   const busy = phase === "analyzing" || phase === "matching";
 
+  /**
+   * Exam Mode rewrites the study order: once the plan exists, must-do topics
+   * come first instead of syllabus order. Same topics, same ids — just ranked
+   * by how much they are actually worth per minute spent.
+   */
+  const displayTopics = useMemo<Topic[]>(
+    () => (exam.plan?.topics?.length ? exam.plan.topics.map((e) => e.topic) : topics),
+    [exam.plan, topics],
+  );
+
+  /** topicId -> its exam priority entry, for badges and PYQ practice. */
+  const examByTopic = useMemo(() => {
+    const map = new Map<string, ExamTopic>();
+    for (const entry of exam.plan?.topics ?? []) map.set(entry.topic.id, entry);
+    return map;
+  }, [exam.plan]);
+
+  /**
+   * topicId -> the real past questions that belong to it.
+   *
+   * These come from the PLAN, not from `exam.questions`: the question-to-topic
+   * mapping happens server-side inside /api/examplan, and the plan's
+   * `signal.questions` are the only client-side copy carrying `topicId`.
+   * Reading `exam.questions` here would silently produce an empty map and the
+   * PYQ practice panel would never render.
+   */
+  const pyqByTopic = useMemo(() => {
+    const map = new Map<string, PyqQuestion[]>();
+    for (const entry of exam.plan?.topics ?? []) {
+      const list = entry.signal.questions ?? [];
+      if (list.length > 0) map.set(entry.topic.id, list);
+    }
+    return map;
+  }, [exam.plan]);
+
+  const handlePlanBuilt = useCallback(
+    (plan: ExamPlanResponse) => {
+      const must = plan.topics?.filter((t) => t.band === "must").length ?? 0;
+      notify(`🎯 Exam plan ready — ${must} must-do topics prioritised.`);
+    },
+    [notify],
+  );
+
   /* ------------------------------ matching ------------------------------ */
   const runMatching = useCallback(
     async (
@@ -141,6 +210,8 @@ export default function Home() {
       lang: string,
       picks: number,
       skipStudied: boolean,
+      /** topicId -> playlist video id that teaches it (syllabus continuity). */
+      course: Record<string, string> = {},
     ) => {
       let cursor = 0;
 
@@ -173,6 +244,7 @@ export default function Home() {
                 language: lang,
                 subject: courseName,
                 limit: picks,
+                courseVideoId: course[topic.id],
               }),
               signal,
             });
@@ -203,6 +275,79 @@ export default function Home() {
     [isStudied],
   );
 
+  /* ------------------------------ playlist ------------------------------- */
+  /**
+   * Looks for an EXISTING full-course playlist that already teaches this
+   * syllabus. This runs BEFORE per-topic matching on purpose: once we know the
+   * playlist, every single topic gets its continuity pick from the first video
+   * onwards, instead of half the list being re-done later. A miss is a normal
+   * outcome, not an error — matching just falls back to pure per-topic search.
+   */
+  const lookupPlaylist = useCallback(
+    async (
+      list: Topic[],
+      courseName: string,
+      lang: string,
+      syllabusText: string,
+    ): Promise<CoursePlaylist | null> => {
+      if (list.length === 0) return null;
+      setPlaylistLoading(true);
+      try {
+        const response = await fetch("/api/playlists", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topics: list.map((t) => ({
+              id: t.id,
+              title: t.title,
+              description: t.description,
+              keywords: t.keywords,
+            })),
+            subject: courseName,
+            language: lang,
+            syllabus: syllabusText,
+          }),
+        });
+        const data: PlaylistResponse = await response.json();
+        if (data.ok && data.playlist) {
+          setPlaylist(data.playlist);
+          notify(
+            `📘 Playlist mili — ${data.playlist.coveragePercent}% syllabus cover kar rahi hai.`,
+          );
+          return data.playlist;
+        }
+        return null;
+      } catch {
+        /* playlist lookup is a bonus — never block the student on it */
+        return null;
+      } finally {
+        setPlaylistLoading(false);
+      }
+    },
+    [notify],
+  );
+
+  /**
+   * Kicks off per-topic matching. When `wanted` is null the playlist is looked
+   * up FIRST, so matching can use it from the very first topic rather than
+   * half-way through.
+   */
+  const startMatching = useCallback(
+    async (
+      list: Topic[],
+      courseName: string,
+      signal: AbortSignal,
+      lang: string,
+      picks: number,
+      syllabusText: string,
+      wanted: CoursePlaylist | null,
+    ) => {
+      const chosen = wanted ?? (await lookupPlaylist(list, courseName, lang, syllabusText));
+      await runMatching(list, courseName, signal, lang, picks, true, coverageMap(chosen));
+    },
+    [lookupPlaylist, runMatching],
+  );
+
   /* ------------------------------ analyse ------------------------------- */
   const startAnalysis = useCallback(async () => {
     if (syllabus.trim().length < 20) {
@@ -222,6 +367,10 @@ export default function Home() {
     setResults({});
     setTopics([]);
     setActiveId(null);
+    setPlaylist(null);
+    // Keep the uploaded PAPERS (re-OCR is expensive) but drop derived state —
+    // new topics mean the plan and the topic mapping must be rebuilt.
+    setExam({ questions: [], parsedPapers: [], plan: null });
     setPhase("analyzing");
 
     try {
@@ -244,13 +393,21 @@ export default function Home() {
         notify("Syllabus was large — showing the top topics first.");
       }
       setPhase("matching");
-      void runMatching(data.topics, courseName, controller.signal, language, perTopic, true);
+      void startMatching(
+        data.topics,
+        courseName,
+        controller.signal,
+        language,
+        perTopic,
+        syllabus,
+        null,
+      );
     } catch (err) {
       if (controller.signal.aborted) return;
       setPhase("idle");
       setFormError(err instanceof Error ? err.message : "Something went wrong.");
     }
-  }, [syllabus, subject, language, perTopic, runMatching, notify]);
+  }, [syllabus, subject, language, perTopic, startMatching, setExam, notify]);
 
   /** Fetches videos for a single topic (used when a topic is un-ticked). */
   const matchTopic = useCallback(
@@ -270,6 +427,7 @@ export default function Home() {
             language,
             subject: subjectName,
             limit: perTopic,
+            courseVideoId: coverageMap(playlist)[topic.id],
           }),
         });
         const data: VideosResponse = await response.json();
@@ -288,7 +446,7 @@ export default function Home() {
         }));
       }
     },
-    [language, subjectName, perTopic],
+    [language, subjectName, perTopic, playlist],
   );
 
   /** Tick/untick a topic. Unticking a skipped topic re-searches its videos. */
@@ -317,9 +475,18 @@ export default function Home() {
     setResults({});
     setPhase("matching");
     setFormError(null);
-    await runMatching(topics, subjectName, controller.signal, language, perTopic, true);
+    // Re-use the playlist we already verified, so the coverage promise holds.
+    await startMatching(
+      topics,
+      subjectName,
+      controller.signal,
+      language,
+      perTopic,
+      syllabus,
+      playlist,
+    );
     notify("Videos re-matched with your current settings.");
-  }, [topics, subjectName, language, perTopic, runMatching, notify]);
+  }, [topics, subjectName, language, perTopic, syllabus, playlist, startMatching, notify]);
 
   /** Fills the syllabus box from an uploaded file. */
   const handleFileText = useCallback((text: string, fileName: string) => {
@@ -335,6 +502,8 @@ export default function Home() {
     setTopics([]);
     setResults({});
     setSubjectName("");
+    setPlaylist(null);
+    setExamState(EMPTY_EXAM_STATE);
     setPhase("idle");
     setFormError(null);
     setActiveId(null);
@@ -371,18 +540,20 @@ export default function Home() {
   const hasVideos = videoCount > 0;
 
   const handleCopy = useCallback(async () => {
-    const ok = await copyText(buildMarkdown(subjectName, topics, results, isStudied));
+    const ok = await copyText(
+      buildMarkdown(subjectName, topics, results, isStudied, playlist),
+    );
     notify(ok ? "Study list copied to clipboard ✅" : "Could not copy — try the download button.");
-  }, [subjectName, topics, results, isStudied, notify]);
+  }, [subjectName, topics, results, isStudied, playlist, notify]);
 
   const handleDownloadMd = useCallback(() => {
     downloadFile(
       `${slugify(subjectName || "syllabus")}-best-videos.md`,
-      buildMarkdown(subjectName, topics, results, isStudied),
+      buildMarkdown(subjectName, topics, results, isStudied, playlist),
       "text/markdown;charset=utf-8",
     );
     notify("Markdown file downloaded.");
-  }, [subjectName, topics, results, isStudied, notify]);
+  }, [subjectName, topics, results, isStudied, playlist, notify]);
 
   const handleDownloadCsv = useCallback(() => {
     downloadFile(
@@ -465,7 +636,7 @@ export default function Home() {
             <div>
               <p className="text-[0.95rem] font-extrabold leading-none">ExamSmasher</p>
               <p className="mt-0.5 text-[0.68rem] text-[var(--muted)]">
-                Syllabus → AI-analysed topics → best videos
+                Past papers → exam priority → notes, PYQs & videos
               </p>
             </div>
           </div>
@@ -506,32 +677,33 @@ export default function Home() {
         {phase === "idle" && topics.length === 0 && (
           <section className="mb-8 text-center">
             <h1 className="mx-auto max-w-3xl text-3xl font-extrabold leading-tight sm:text-5xl">
-              Apna syllabus daalo — <span className="gradient-text">best videos</span> poori
-              analysis ke saath le aao.
+              Kam time, zyada marks — <span className="gradient-text">exam-first</span> tarike se
+              padho.
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-[var(--muted)] sm:text-base">
-              ExamSmasher aapka syllabus AI se topics me todta hai, har topic ke liye YouTube
-              search karta hai, video ke <strong className="text-[var(--text)]">actual content</strong>{" "}
-              (transcript + metadata) se match karke sabse achhi explainer videos rank kar deta
-              hai — default English, chaaho to Hindi, Hinglish ya 13 aur languages.
+              Apne <strong className="text-[var(--text)]">purane question papers</strong> daalo —
+              ExamSmasher nikaalega ki kaunsa topic har saal aata hai aur kaunsa nahi, phir
+              return-per-minute ke hisaab se batayega kya pehle padhna hai. Uske baad concept ke
+              liye videos, <strong className="text-[var(--text)]">3-level notes</strong>, PYQ
+              practice aur quiz.
             </p>
 
             <div className="mx-auto mt-7 grid max-w-4xl gap-3 sm:grid-cols-3">
               {[
                 {
-                  icon: <SparklesIcon width={18} height={18} />,
-                  title: "AI syllabus breakdown",
-                  body: "Har chapter se crisp, searchable study topics — importance, difficulty aur time ke saath.",
+                  icon: <span className="text-lg">🎯</span>,
+                  title: "Exam Mode — real papers se trend",
+                  body: "2-3 purane papers upload karo. Kaunsa topic repeats hai, kitne marks ka hai, kya nahi aata — sab asli data se, guess se nahi.",
                 },
                 {
-                  icon: <PlayIcon width={18} height={18} />,
-                  title: "Real content match",
-                  body: "Sirf title nahi — captions/transcript padh kar verify hota hai ki video sach me topic padhata hai.",
+                  icon: <span className="text-lg">⏳</span>,
+                  title: "Priority by return per minute",
+                  body: "Bol de kitna time hai — plan batayega must-do topics kaunse hain, har ek ko uske hisaab ke minutes baantega.",
                 },
                 {
-                  icon: <BookIcon width={18} height={18} />,
-                  title: "Ranked study list",
-                  body: "Left side topics, right side best videos. Score, reason aur ek-click watch link.",
+                  icon: <span className="text-lg">📚</span>,
+                  title: "3-level notes + PYQ + quiz",
+                  body: "Detailed (concept) → short bullets (revision) → flashcards. Plus asli past questions solve karo aur quiz se khud check karo.",
                 },
               ].map((feature) => (
                 <div key={feature.title} className="card p-4 text-left">
@@ -580,7 +752,15 @@ export default function Home() {
                 <Stat label="Subject" value={subjectName || "Your course"} />
                 <Stat label="Topics" value={String(topics.length)} />
                 <Stat label="Matched" value={`${matchedTopics}/${topics.length}`} />
+                <Stat
+                  label="Syllabus covered"
+                  value={`${coveragePercent}%`}
+                  accent
+                />
                 <Stat label="Videos" value={String(videoCount)} />
+                {exam.papers.length > 0 && (
+                  <Stat label="Past papers" value={String(exam.papers.length)} accent />
+                )}
                 <Stat
                   label="Studied"
                   value={`${studiedCount}/${topics.length}`}
@@ -658,9 +838,49 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Exam Mode — real past papers -> priority plan, PYQs, expected questions, quiz */}
+            <ExamMode
+              topics={topics}
+              subject={subjectName}
+              exam={exam}
+              setExam={setExam}
+              onPlanBuilt={handlePlanBuilt}
+              onJumpToTopic={jumpTo}
+            />
+
+            {/* Verified full-course playlist — the "one playlist, whole syllabus" answer */}
+            {playlistLoading && !playlist && (
+              <div className="card mt-4 flex items-center gap-3 px-4 py-3 text-xs text-[var(--muted)]">
+                <span className="skeleton h-4 w-4 shrink-0 rounded-full" />
+                Existing full-course playlist dhoond raha hoon, taaki poora syllabus ek hi
+                jagah cover ho sake…
+              </div>
+            )}
+
+            {playlist && (
+              <PlaylistBanner
+                playlist={playlist}
+                totalTopics={topics.length}
+                matching={phase === "matching"}
+                onUse={() => {
+                  if (!playlist.coverage.length) return;
+                  void startMatching(
+                    topics,
+                    subjectName,
+                    new AbortController().signal,
+                    language,
+                    perTopic,
+                    syllabus,
+                    playlist,
+                  );
+                  notify("Playlist se videos dobara match ho rahe hain…");
+                }}
+              />
+            )}
+
             <div className="mt-6 grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
               <TopicSidebar
-                topics={topics}
+                topics={displayTopics}
                 results={results}
                 activeId={activeId}
                 onJump={jumpTo}
@@ -673,7 +893,7 @@ export default function Home() {
               />
 
               <div className="space-y-10">
-                {topics.map((topic, index) => (
+                {displayTopics.map((topic, index) => (
                   <TopicPanel
                     key={topic.id}
                     topic={topic}
@@ -683,6 +903,8 @@ export default function Home() {
                     subject={subjectName}
                     syllabus={syllabus}
                     languageCode={language}
+                    examEntry={examByTopic.get(topic.id)}
+                    pyqQuestions={pyqByTopic.get(topic.id)}
                     onToggleStudied={() => handleToggleStudied(topic.title)}
                     onPlay={setPlayer}
                   />
@@ -719,8 +941,8 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-[var(--line)] py-6 text-center text-xs text-[var(--muted)]">
-        ExamSmasher · YouTube Data API + Gemini · Video matching uses transcript &amp; metadata
-        signals, not watch-time.
+        ExamSmasher · trends from YOUR real papers · YouTube + Gemini · priority is computed from
+        actual questions, not guessed.
       </footer>
 
       <StudyPlanModal

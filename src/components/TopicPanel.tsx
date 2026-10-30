@@ -3,7 +3,9 @@
 import type { PlayerVideo } from "@/components/VideoPlayerModal";
 import { CheckIcon } from "@/components/Icons";
 import { AlertIcon } from "@/components/Icons";
-import type { Topic, TopicResult } from "@/lib/types";
+import { BAND_LABEL, TREND_LABEL } from "@/lib/exam";
+import type { ExamTopic, PyqQuestion, Topic, TopicResult } from "@/lib/types";
+import { PyqPractice } from "./PyqPractice";
 import { TopicNotes } from "./TopicNotes";
 import { VideoCard } from "./VideoCard";
 
@@ -11,6 +13,12 @@ const IMPORTANCE_COLOR: Record<string, string> = {
   core: "var(--bad)",
   important: "var(--warn)",
   bonus: "var(--muted)",
+};
+
+const BAND_COLOR: Record<ExamTopic["band"], string> = {
+  must: "var(--bad)",
+  should: "var(--warn)",
+  "if-time": "var(--muted)",
 };
 
 interface TopicPanelProps {
@@ -23,6 +31,10 @@ interface TopicPanelProps {
   syllabus: string;
   /** Language code for transcript-based video summaries. */
   languageCode: string;
+  /** Set once Exam Mode has ranked this topic against the real papers. */
+  examEntry?: ExamTopic;
+  /** Real past questions that map to this topic. */
+  pyqQuestions?: PyqQuestion[];
   onToggleStudied: () => void;
   onPlay: (video: PlayerVideo) => void;
 }
@@ -35,6 +47,8 @@ export function TopicPanel({
   subject,
   syllabus,
   languageCode,
+  examEntry,
+  pyqQuestions,
   onToggleStudied,
   onPlay,
 }: TopicPanelProps) {
@@ -105,17 +119,42 @@ export function TopicPanel({
             <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">{topic.description}</p>
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
+            {examEntry && (
+              <span
+                className="chip font-bold"
+                style={{
+                  color: BAND_COLOR[examEntry.band],
+                  borderColor: `color-mix(in srgb, ${BAND_COLOR[examEntry.band]} 50%, var(--line))`,
+                }}
+                title="Ranked by how many marks this topic is worth per minute of study"
+              >
+                #{examEntry.priority} {BAND_LABEL[examEntry.band]}
+              </span>
+            )}
+            {examEntry && examEntry.signal.trend !== "rare" && (
+              <span className="chip">{TREND_LABEL[examEntry.signal.trend]}</span>
+            )}
+            {examEntry && examEntry.signal.totalMarks > 0 && (
+              <span className="chip">{examEntry.signal.totalMarks} marks in papers</span>
+            )}
             {topic.chapter && <span className="chip">{topic.chapter}</span>}
             <span className="chip" style={{ color: IMPORTANCE_COLOR[topic.importance] }}>
               {topic.importance}
             </span>
             <span className="chip">{topic.difficulty}</span>
             <span className="chip">~{topic.estimatedMinutes} min</span>
+            {examEntry && <span className="chip">plan: {examEntry.minutes} min</span>}
           </div>
         </div>
       </header>
 
       <div className="ml-0 space-y-3 sm:ml-11">
+        {/* What the exam actually asks — shown first so the student knows what
+            to watch FOR rather than watching passively. */}
+        {pyqQuestions && pyqQuestions.length > 0 && (
+          <PyqPractice topic={topic} questions={pyqQuestions} subject={subject} />
+        )}
+
         {result?.skipped && (
           <div className="rounded-xl border border-dashed border-[var(--line)] px-4 py-4 text-sm text-[var(--muted)]">
             ✅ Tumne ye topic pehle padh liya hai — isliye video search skip kar di.

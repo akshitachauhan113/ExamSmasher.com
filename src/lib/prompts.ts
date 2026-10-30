@@ -188,10 +188,10 @@ export interface NotesInput {
 }
 
 export function buildNotesPrompt(input: NotesInput): { system: string; prompt: string } {
-  const system = `You are a senior teacher writing concise, exam-ready study material.
+  const system = `You are a senior teacher writing exam-ready study material in three levels of depth.
 You ALWAYS reply with one valid JSON object and nothing else - no markdown, no commentary.`;
 
-  const prompt = `Write study notes + flashcards for ONE topic from a student's syllabus.
+  const prompt = `Write THREE levels of study material for ONE topic from a student's syllabus.
 
 SUBJECT: ${input.subject || "Not specified"}
 TOPIC: ${input.topic.title}
@@ -205,15 +205,25 @@ ${
     : ""
 }
 
-RULES:
-1. "notes" = 2 to 4 sections. Each has a short "heading" and 4-7 "bullets".
-2. Bullets must be SHORT (max ~18 words) but information-dense: definitions, formulas, key steps, dates, exceptions, common mistakes, exam tips.
-3. Write for a student who is revising: plain language, no filler, no "in this section we will...".
-4. "cards" = 6 to 10 flashcards. "q" is a crisp question (definition, formula recall, difference-between, "why"), "a" is the answer in max 25 words.
-5. Use the student's language only for your own wording style; keep technical terms and formulas exactly as the syllabus uses them.
+THE THREE LEVELS:
+1. "detailed" = 3 to 5 sections. Each has a short "heading" and 2 to 3 "paragraphs".
+   Paragraphs are 45-80 words of real teaching: what the idea means, why it matters, how it
+   works step by step, with formulas / examples / exceptions worked in. This is what a student
+   reads when they know NOTHING yet. Plain language, no filler, no "in this section we will".
+2. "notes" = the same sections, but each bullet must be ONE SHORT LINE (max ~18 words),
+   information-dense: definitions, formulas, key steps, dates, exceptions, exam tips.
+   This is the 10-minute revision version. Do not just split the paragraphs mechanically —
+   pick the highest-value facts.
+3. "cards" = 8 to 14 flashcards. "q" is a crisp question (definition, formula recall,
+   difference-between, "why"), "a" is the answer in max 25 words.
+
+Keep technical terms and formulas exactly as the syllabus uses them.
 
 Return EXACTLY this JSON shape:
 {
+  "detailed": [
+    { "heading": "Section heading", "paragraphs": ["First explaining paragraph.", "Second paragraph."] }
+  ],
   "notes": [
     { "heading": "Section heading", "bullets": ["short dense point", "another point"] }
   ],
@@ -225,8 +235,331 @@ Return EXACTLY this JSON shape:
   return { system, prompt };
 }
 
-/* ------------------------------ video summary ------------------------------ */
+/* ------------------------------- exam mode -------------------------------- */
 
+export interface ParsePapersInput {
+  subject: string;
+  papers: Array<{ id: string; year: string; label: string; text: string }>;
+}
+
+/**
+ * Turns raw previous-year paper text into clean, structured questions.
+ * The year/label is attached here so every question can be traced back to the
+ * paper it really came from — nothing gets invented.
+ */
+export function buildParsePapersPrompt(
+  input: ParsePapersInput,
+): { system: string; prompt: string } {
+  const blocks = input.papers
+    .map(
+      (p) =>
+        `===== PAPER id=${p.id} · ${p.label} ${p.year} =====\n${p.text.slice(0, 9000)}`,
+    )
+    .join("\n\n");
+
+  const system = `You are an exam paper reader. You extract questions from previous-year university
+question papers EXACTLY as they are printed. You never invent, reword into a different question,
+merge, or split questions. You ALWAYS reply with one valid JSON object and nothing else.`;
+
+  const prompt = `Extract every question from the previous-year paper(s) below for the subject
+"${input.subject || "Unknown subject"}".
+
+${blocks}
+
+RULES:
+1. Copy each question's TEXT faithfully. Keep numbers, formulas, units, roman numerals and
+   option letters. Fix only obvious OCR garbling (e.g. "lhe" -> "the"); never change meaning.
+2. "number" = the printed question number, e.g. "Q4", "3(b)", "Q7 (a)".
+3. "marks" = printed marks if present, otherwise null. Do NOT guess marks.
+4. "section" = the printed section/unit grouping if the paper has one, else omit it.
+5. "type": objective | short | long | numerical | proof | other. A 1-mark true/false or MCQ is
+   objective. A 2-6 line explanation is short. A full essay/derivation is long. A calculation is
+   numerical. A mathematical proof is proof.
+6. Carry the paper's own id/label/year onto every question from that paper.
+7. Skip administrative text: instructions, "Roll No.", "Time allowed", page headers/footers,
+   "Attempt any five" style directions.
+8. If a paper is unreadable or contains no questions, return an empty list for it — never guess.
+
+Return EXACTLY this JSON shape:
+{
+  "questions": [
+    {
+      "paperId": "PAPER_ID",
+      "number": "Q4",
+      "section": "Section B",
+      "marks": 6,
+      "type": "long",
+      "text": "Explain the working of ... with a neat diagram."
+    }
+  ]
+}`;
+
+  return { system, prompt };
+}
+
+export interface MapQuestionsInput {
+  topics: Array<{ id: string; title: string; description?: string; keywords?: string[] }>;
+  questions: Array<{ id: string; paperYear: string; text: string }>;
+}
+
+/**
+ * Asks the model which syllabus topic each real past question belongs to.
+ * Frequency is computed deterministically afterwards from these mappings, so
+ * the "repeating" claim is always backed by an actual paper.
+ */
+export function buildMapQuestionsPrompt(
+  input: MapQuestionsInput,
+): { system: string; prompt: string } {
+  const topicLines = input.topics
+    .map(
+      (t, i) =>
+        `${i + 1}. id=${t.id} | ${t.title}${t.description ? ` — ${t.description}` : ""}`,
+    )
+    .join("\n");
+
+  const questionLines = input.questions
+    .map((q) => `id=${q.id} (${q.paperYear}) | ${q.text.slice(0, 300)}`)
+    .join("\n");
+
+  const system = `You are a university examiner who knows exactly which syllabus topic each past
+question belongs to. You ALWAYS reply with one valid JSON object and nothing else.`;
+
+  const prompt = `Map every past question below onto ONE syllabus topic.
+
+SYLLABUS TOPICS:
+${topicLines}
+
+PAST QUESTIONS:
+${questionLines}
+
+RULES:
+1. Each question maps to exactly ONE topic — the main one it tests.
+2. Only use topic ids that appear above. Never invent an id.
+3. If a question genuinely does not belong to any listed topic (it is out of syllabus), leave it
+   out of your answer rather than forcing a bad fit.
+4. Do not merge or reword questions.
+
+Return EXACTLY this JSON shape:
+{
+  "maps": [ { "questionId": "Q_ID", "topicId": "TOPIC_ID" } ]
+}`;
+
+  return { system, prompt };
+}
+
+export interface ExpectedInput {
+  subject: string;
+  /** Real questions, grouped by how often that pattern showed up. */
+  groups: Array<{
+    topicTitle: string;
+    trend: string;
+    questions: Array<{ text: string; paperYear: string; marks?: number }>;
+  }>;
+}
+
+/**
+ * Builds "most expected this year" from REAL recurring patterns. It is framed
+ * as a prediction extrapolated from actual papers, never as a leaked paper.
+ */
+export function buildExpectedPrompt(input: ExpectedInput): { system: string; prompt: string } {
+  const groupLines = input.groups
+    .map(
+      (g, i) =>
+        `${i + 1}. TOPIC: ${g.topicTitle} (trend: ${g.trend})\n` +
+        g.questions
+          .map((q) => `   - [${q.paperYear}${q.marks ? `, ${q.marks} marks` : ""}] ${q.text.slice(0, 260)}`)
+          .join("\n"),
+    )
+    .join("\n");
+
+  const system = `You are a university exam predictor. You build "most expected questions" by
+extrapolating from a student's REAL previous-year papers — you never present anything as a leaked
+or official paper. You ALWAYS reply with one valid JSON object and nothing else.`;
+
+  const prompt = `A student has past papers for "${input.subject}". Below are the real questions
+grouped by topic, with how reliable that topic's trend is. Write the questions most likely to
+appear in the NEXT exam.
+
+REAL PAST QUESTIONS BY TOPIC:
+${groupLines}
+
+RULES:
+1. Every prediction must be grounded in a real pattern above. If a topic's questions repeat almost
+   verbatim, predict that question as-is — do not invent a new angle.
+2. Where a topic repeats with small variations, write ONE variant that follows the observed pattern.
+3. Prioritise: repeating topics first, then important, then occasional. Do not include rare topics.
+4. "basis" must name the real evidence, e.g. "asked in 2022, 2023 & 2024 — same wording".
+5. Never claim certainty. These are predictions, not a leaked paper.
+6. Keep "text" close to the original wording so revision transfers directly.
+
+Return EXACTLY this JSON shape:
+{
+  "expected": [
+    {
+      "text": "Question text",
+      "topicTitle": "Topic it belongs to",
+      "marks": 6,
+      "confidence": "high",
+      "basis": "Evidence from the real papers"
+    }
+  ]
+}`;
+
+  return { system, prompt };
+}
+
+export interface QuizInput {
+  subject: string;
+  /** Topics to test, with their real past questions as the source of truth. */
+  topics: Array<{
+    id: string;
+    title: string;
+    pastQuestions: string[];
+  }>;
+  count: number;
+}
+
+/** Builds a quiz from real past questions so practice matches the actual exam. */
+export function buildQuizPrompt(input: QuizInput): { system: string; prompt: string } {
+  const topicLines = input.topics
+    .map(
+      (t) =>
+        `### id=${t.id} | ${t.title}\n` +
+        (t.pastQuestions.length
+          ? t.pastQuestions.map((q) => `- ${q.slice(0, 240)}`).join("\n")
+          : "- (no past questions on record)"),
+    )
+    .join("\n\n");
+
+  const system = `You are a university examiner writing a short practice quiz. You test what the
+REAL past papers actually asked. You ALWAYS reply with one valid JSON object and nothing else.`;
+
+  const prompt = `Write ${input.count} MCQs for "${input.subject}".
+
+TOPICS AND THEIR REAL PAST QUESTIONS:
+${topicLines}
+
+RULES:
+1. Base every question on a real past question above wherever possible — same concept, possibly a
+   fresh number or context. Only fall back to the topic itself when there is no past question.
+2. Four options: "options" has exactly 4 strings, exactly one correct.
+3. "answer" is the 0-based INDEX of the correct option. Double-check it is right.
+4. "explanation" = one or two lines saying WHY the right answer is right, ideally referencing the
+   concept. Useful for revision.
+5. Make wrong options plausible near-misses (common confusion), not jokes.
+6. Cover ${input.count} DIFFERENT topics where possible; do not ask two questions on one topic.
+
+Return EXACTLY this JSON shape:
+{
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Question text?",
+      "options": ["A", "B", "C", "D"],
+      "answer": 2,
+      "explanation": "Why C is correct.",
+      "topicId": "TOPIC_ID"
+    }
+  ]
+}`;
+
+  return { system, prompt };
+}
+
+export interface AnswerInput {
+  question: string;
+  subject: string;
+  topicTitle?: string;
+  marks?: number;
+  year?: string;
+}
+
+/** Writes a model answer for one real past question — how to actually score. */
+export function buildAnswerPrompt(input: AnswerInput): { system: string; prompt: string } {
+  const system = `You are a university examiner who sets and marks this subject. You write model
+answers that earn full marks, and you are honest about what earns partial marks.
+Reply in plain text with light markdown. No preamble.`;
+
+  const prompt = `Write a model answer for this real past question from ${input.year || "a past paper"}.
+
+SUBJECT: ${input.subject}
+${input.topicTitle ? `TOPIC: ${input.topicTitle}` : ""}
+${input.marks ? `MARKS: ${input.marks} — scale the depth to the marks.` : ""}
+
+QUESTION:
+"""
+${input.question}
+"""
+
+FORMAT:
+**Answer** — the answer itself, structured the way an examiner wants to see it (steps, points,
+diagram descriptions, formulae). For numericals, show the working.
+**Key points** — bullet list of what earns marks.
+**Common mistake** — one line on how students usually lose marks here.
+**How to revise this** — one line pointing at what to memorise.`;
+
+  return { system, prompt };
+}
+
+/* --------------------------- playlist ↔ syllabus map --------------------------- */
+export interface PlaylistMapInput {
+  topics: Array<{ id: string; title: string; description?: string; keywords?: string[] }>;
+  /** Playlist video titles in playlist order, prefixed with their position. */
+  videos: Array<{ id: string; title: string; position: number }>;
+}
+
+/**
+ * Asks the model which playlist video teaches each syllabus topic.
+ * This is what turns a random YouTube playlist into a verified syllabus match.
+ */
+export function buildPlaylistMapPrompt(
+  input: PlaylistMapInput,
+): { system: string; prompt: string } {
+  const topicLines = input.topics
+    .map(
+      (t, i) =>
+        `${i + 1}. id=${t.id} | ${t.title}${t.description ? ` — ${t.description}` : ""}${
+          t.keywords?.length ? ` | keywords: ${t.keywords.slice(0, 5).join(", ")}` : ""
+        }`,
+    )
+    .join("\n");
+
+  const videoLines = input.videos
+    .map((v) => `#${v.position + 1} id=${v.id} | ${v.title}`)
+    .join("\n");
+
+  const system = `You are a curriculum analyst who checks whether an existing YouTube course
+playlist actually teaches a student's syllabus. You map syllabus topics onto playlist videos.
+You ALWAYS reply with one valid JSON object and nothing else.`;
+
+  const prompt = `Below is a student's syllabus broken into topics, and the video titles of an
+existing YouTube playlist. Decide which playlist video teaches each topic.
+
+SYLLABUS TOPICS:
+${topicLines}
+
+PLAYLIST VIDEOS (in order):
+${videoLines}
+
+RULES:
+1. Map a topic ONLY when the playlist video genuinely teaches it. Partial or adjacent coverage
+   does NOT count — "Intro to Recursion" does not cover "Recursion: base cases & stack traces".
+2. One video may cover several topics; one topic maps to at most ONE video (the best one).
+3. Order matters: pick the video that covers the topic most completely, not the first mention.
+4. A topic with no real match is simply left out of your answer — do NOT invent ids.
+5. Only use ids that literally appear above. Never invent a video id.
+
+Return EXACTLY this JSON shape:
+{
+  "maps": [
+    { "topicId": "TOPIC_ID", "videoId": "VIDEO_ID" }
+  ]
+}`;
+
+  return { system, prompt };
+}
+
+/* ------------------------------ video summary ------------------------------ */
 export interface SummaryInput {
   topicTitle: string;
   videoTitle: string;

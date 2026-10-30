@@ -43,6 +43,8 @@ export interface ScoredVideo {
   transcriptSnippet?: string;
   aiSummary?: string;
   trustedChannel: boolean;
+  /** True when this exact video sits inside the recommended full-course playlist. */
+  inCoursePlaylist?: boolean;
   rank: number;
 }
 
@@ -78,19 +80,36 @@ export interface HealthResponse {
   model: string | null;
 }
 
-/** Study notes for one topic, generated from the student's own syllabus. */
+/* --------------------------- three levels of notes --------------------------- */
+
+/** Level 1 — Detailed: proper explanations in paragraphs (concept clarity). */
+export interface DetailedSection {
+  heading: string;
+  paragraphs: string[];
+}
+
+/** Level 2 — Short: dense one-line bullets (fast revision). */
 export interface NotesSection {
   heading: string;
   bullets: string[];
 }
 
+/** Level 3 — Flashcards: active recall / self-testing. */
 export interface Flashcard {
   q: string;
   a: string;
 }
 
+/** All three levels for one topic, generated in a single AI call. */
+export interface NotesBundle {
+  detailed: DetailedSection[];
+  notes: NotesSection[];
+  cards: Flashcard[];
+}
+
 export interface NotesResponse {
   ok: boolean;
+  detailed?: DetailedSection[];
   notes?: NotesSection[];
   cards?: Flashcard[];
   error?: string;
@@ -141,5 +160,140 @@ export interface PlanResponse {
   days?: PlanDay[];
   tips?: string[];
   markdown?: string;
+  error?: string;
+}
+
+/* --------------------------- full-course playlists --------------------------- */
+
+/** One video sitting inside a playlist, in playlist order. */
+export interface PlaylistVideo {
+  videoId: string;
+  title: string;
+  position: number;
+}
+
+/** One topic mapped onto the playlist video that teaches it. */
+export interface PlaylistCoverage {
+  topicId: string;
+  videoId: string;
+  videoTitle: string;
+}
+
+/** A single "complete course" playlist, as found on YouTube. */
+export interface PlaylistCandidate {
+  id: string;
+  title: string;
+  channelTitle: string;
+  thumbnail: string;
+  /** Total videos YouTube reports for the playlist. */
+  videoCount: number;
+  url: string;
+}
+
+/** The chosen playlist plus how much of the student's syllabus it covers. */
+export interface CoursePlaylist extends PlaylistCandidate {
+  /** Videos we actually pulled from the playlist (capped). */
+  videos: PlaylistVideo[];
+  /** One entry per covered topic: topicId -> the playlist video that teaches it. */
+  coverage: PlaylistCoverage[];
+  /** 0-100 — share of the student's topics this playlist actually teaches. */
+  coveragePercent: number;
+  /** How the coverage was worked out. */
+  method: "ai" | "keyword";
+  /** Runner-up playlists so the student can switch if they dislike the pick. */
+  alternatives?: PlaylistCandidate[];
+}
+
+export interface PlaylistResponse {
+  ok: boolean;
+  playlist?: CoursePlaylist | null;
+  error?: string;
+}
+
+/* ------------------------------- exam mode -------------------------------- */
+
+/** One question lifted out of a real previous-year paper. */
+export interface PyqQuestion {
+  id: string;
+  /** Year printed on the paper, e.g. "2023". */
+  paperYear: string;
+  /** What exam it came from, e.g. "End Semester" / "Mid Term". */
+  paperLabel: string;
+  /** Section / unit grouping if the paper had one, e.g. "Section B". */
+  section?: string;
+  /** Question number as printed, e.g. "Q4" or "3(b)". */
+  number?: string;
+  marks?: number;
+  text: string;
+  type: "objective" | "short" | "long" | "numerical" | "proof" | "other";
+  /** Syllabus topic this question belongs to (filled in by the trend pass). */
+  topicId?: string;
+  /** How many papers asked a question like this one. */
+  repeatCount?: number;
+  /** True when this is a fresh variant AI built from a real repeating pattern. */
+  isVariant?: boolean;
+}
+
+/** One uploaded previous-year paper, already turned into questions. */
+export interface PyqPaper {
+  id: string;
+  year: string;
+  label: string;
+  questionCount: number;
+}
+
+/** How a single topic showed up across the uploaded papers. */
+export interface TopicExamSignal {
+  topicId: string;
+  /** Total marks this topic has carried across all papers. */
+  totalMarks: number;
+  /** How many of the uploaded papers asked about it. */
+  appearances: number;
+  /** 0-100 — how safe it is to bet your revision time on this topic. */
+  examScore: number;
+  trend: "repeating" | "important" | "occasional" | "rare";
+  /** Real past questions on this topic, most recent first. */
+  questions: PyqQuestion[];
+}
+
+/** A topic placed on the exam plan, with its ROI-based priority. */
+export interface ExamTopic {
+  topic: Topic;
+  signal: TopicExamSignal;
+  /** 1 = highest return per minute spent studying. */
+  priority: number;
+  /** How hard this topic is to actually learn. */
+  band: "must" | "should" | "if-time";
+  /** Minutes this topic deserves under the student's time budget. */
+  minutes: number;
+}
+
+export interface ExamPlanResponse {
+  ok: boolean;
+  subject?: string;
+  papers?: PyqPaper[];
+  topics?: ExamTopic[];
+  /** Highest-frequency real questions, newest first. */
+  expected?: PyqQuestion[];
+  /** Honest note about what the analysis could and could not verify. */
+  notes?: string[];
+  totalMarks?: number;
+  error?: string;
+}
+
+/** One MCQ in a generated quiz. */
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  /** Index of the correct option. */
+  answer: number;
+  explanation: string;
+  topicId?: string;
+}
+
+export interface QuizResponse {
+  ok: boolean;
+  questions?: QuizQuestion[];
   error?: string;
 }

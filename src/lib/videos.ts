@@ -13,11 +13,25 @@ export interface AnalyzeTopicOptions {
   limit: number;
   /** Whether to run the AI ranking pass (needs an AI key). */
   useAi: boolean;
+  /**
+   * The video inside the recommended full-course playlist that teaches this
+   * topic. When set, it is pulled into the candidate pool if missing and gets
+   * a large boost, so following one consistent playlist stays possible.
+   */
+  courseVideoId?: string;
 }
 
 const CACHE_TTL = 20 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 400;
 const cache = new Map<string, { ts: number; value: TopicResult }>();
+
+/**
+ * Being part of a verified syllabus-covering playlist is strong evidence: the
+ * same educator, in order, with the surrounding topics already taught. This
+ * bonus is big enough to beat a slightly-better standalone video on merit,
+ * because syllabus continuity is what the student actually asked for.
+ */
+const PLAYLIST_BONUS = 30;
 
 export function buildQueries(topic: Topic, subject: string, language: LanguageOption): string[] {
   const core = [topic.title, ...topic.keywords.slice(0, 3)].filter(Boolean).join(" ").trim();
@@ -42,7 +56,13 @@ export async function analyzeTopic(
 ): Promise<TopicResult> {
   const language = findLanguage(options.languageCode);
   const limit = Math.min(10, Math.max(1, options.limit));
-  const cacheKey = `${topic.title}|${options.languageCode}|${limit}|${options.useAi ? "ai" : "noai"}`;
+  const cacheKey = [
+    topic.title,
+    options.languageCode,
+    limit,
+    options.useAi ? "ai" : "noai",
+    options.courseVideoId ?? "-",
+  ].join("|");
 
   const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.ts < CACHE_TTL) {
@@ -107,12 +127,18 @@ async function runPipeline(
     }
   }
 
-  if (ids.length === 0) {
+  if (ids.length === 0 && !options.courseVideoId) {
     return { topic, videos: [], candidatesConsidered: 0, queries: allQueries };
   }
 
   // 2. Pull real statistics + duration + captions flag.
-  const details = await fetchVideoDetails(ids.slice(0, 40));
+  //    The playlist pick is always fetched too, even when search found nothing —
+  //    a verified syllabus match beats an empty panel.
+  const detailIds = options.courseVideoId
+    ? [...new Set([options.courseVideoId, ...ids])].slice(0, 40)
+    : ids.slice(0, 40);
+
+  const details = await fetchVideoDetails(detailIds);
   const usable = details
     .filter((v) => v.id && v.durationSeconds >= 60 && v.title !== "(untitled video)")
     .filter((v) => !/\b(shorts?|yt:shorts)\b/i.test(v.title));
@@ -122,11 +148,16 @@ async function runPipeline(
   }
 
   // 3. Cheap metadata pass, so we only download transcripts for the plausible winners.
+  //    The playlist video always survives the cut.
   const prelim = usable
     .map((v) => scoreCandidate(topic, v, null))
     .sort((a, b) => b.heuristicScore - a.heuristicScore);
 
   const shortlist = prelim.slice(0, 12);
+  if (options.courseVideoId && !shortlist.some((e) => e.video.id === options.courseVideoId)) {
+    const fromPlaylist = prelim.find((e) => e.video.id === options.courseVideoId);
+    if (fromPlaylist) shortlist.push(fromPlaylist);
+  }
   const transcripts = await fetchTranscriptsFor(shortlist, language.yt);
 
   // 4. Re-score with transcript evidence where we managed to download captions.
@@ -156,6 +187,12 @@ async function runPipeline(
     finalList = finalList.map((s, i) => ({ ...s, rank: i + 1 }));
   }
 
+  // 6. Course-playlist boost — applied AFTER AI ranking so it can override a
+  //    marginally higher-scoring stray video with the syllabus-continuity pick.
+  if (options.courseVideoId) {
+    finalList = applyPlaylistBoost(finalList, options.courseVideoId);
+  }
+
   return {
     topic,
     videos: finalList.slice(0, limit),
@@ -163,6 +200,35 @@ async function runPipeline(
     queries: allQueries,
     aiUsed,
   };
+}
+
+/**
+ * Flags the playlist video and lifts its score so it leads the panel.
+ * The floor matters: a playlist pick sitting at #1 with a score of 40 would
+ * look broken, so it is raised to a level that justifies the position. The cap
+ * keeps an obviously poor video from claiming a perfect score.
+ */
+function applyPlaylistBoost(list: ScoredVideo[], courseVideoId: string): ScoredVideo[] {
+  return list
+    .map((entry) => {
+      if (entry.video.id !== courseVideoId) return entry;
+
+      return {
+        ...entry,
+        inCoursePlaylist: true,
+        score: Math.min(100, Math.max(entry.score + PLAYLIST_BONUS, 76)),
+        reasons: ["📘 Complete-course playlist · same educator, in order", ...entry.reasons].slice(
+          0,
+          6,
+        ),
+      };
+    })
+    .sort((a, b) => {
+      // Playlist picks lead; inside each group the normal score decides.
+      if (a.inCoursePlaylist !== b.inCoursePlaylist) return a.inCoursePlaylist ? -1 : 1;
+      return b.score - a.score;
+    })
+    .map((s, index) => ({ ...s, rank: index + 1 }));
 }
 
 /** Runs the search fan-out and flattens the results into unique video ids. */

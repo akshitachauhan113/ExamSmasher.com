@@ -8,6 +8,7 @@ export async function POST(request: Request): Promise<Response> {
     language?: unknown;
     subject?: unknown;
     limit?: unknown;
+    courseVideoId?: unknown;
   } | null;
 
   const topic = normalizeTopic(body?.topic);
@@ -29,11 +30,19 @@ export async function POST(request: Request): Promise<Response> {
 
   const useAi = Boolean(getLlmConfig());
 
+  // Passed by the client when the syllabus-covering playlist has a video for
+  // this topic — see /api/playlists.
+  const courseVideoId =
+    typeof body?.courseVideoId === "string" && /^[A-Za-z0-9_-]{6,20}$/.test(body.courseVideoId)
+      ? body.courseVideoId
+      : undefined;
+
   const result = await analyzeTopic(topic, {
     languageCode,
     subject,
     limit,
     useAi,
+    courseVideoId,
   });
 
   const response: VideosResponse = { ok: true, result };
