@@ -13,6 +13,7 @@ import type {
   Topic,
 } from "@/lib/types";
 import { AlertIcon, CalendarIcon, RefreshIcon, UploadIcon } from "./Icons";
+import { DocPanel } from "./DocPanel";
 import { QuizBox } from "./QuizBox";
 
 interface ExamModeProps {
@@ -497,6 +498,9 @@ export function ExamMode({
             </ul>
           )}
 
+          {/* Answer key + a paper with the same shape as the real thing */}
+          <PaperOutputs questions={questions} plan={plan} />
+
           <QuizBox
             topics={plan.topics}
             subject={plan.subject ?? subject}
@@ -505,6 +509,146 @@ export function ExamMode({
       )}
     </section>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two documents a student needs AFTER reading the plan: the answer key for
+ * the papers they already sat, and a fresh paper with the same shape.
+ *
+ * Solutions are generated per paper so each paper's key stays in its own
+ * printed order — mixing two years into one list makes it unusable against a
+ * real sheet.
+ */
+function PaperOutputs({
+  questions,
+  plan,
+}: {
+  questions: PyqQuestion[];
+  plan: ExamPlanResponse;
+}) {
+  const realQuestions = questions.filter((q) => !q.isVariant);
+  const [mockNote, setMockNote] = useState<string | null>(null);
+  if (realQuestions.length === 0) return null;
+
+  const papers = groupByPaper(realQuestions);
+  const subject = plan.subject ?? "";
+
+  const getSolutions = async (paper: PaperGroup): Promise<string> => {
+    const response = await fetch("/api/solutions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        papers: [
+          {
+            label: paper.label,
+            year: paper.year,
+            questions: paper.questions.map((q) => ({
+              text: q.text,
+              marks: q.marks,
+              number: q.number,
+            })),
+          },
+        ],
+      }),
+    });
+    const data: { ok: boolean; markdown?: string; error?: string } = await response.json();
+    if (!data.ok || !data.markdown) throw new Error(data.error || "Solutions nahi ban paaye.");
+    return data.markdown;
+  };
+
+  const getMockTest = async (): Promise<string> => {
+    const response = await fetch("/api/mocktest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        questions: realQuestions,
+        topics: plan.topics ?? [],
+      }),
+    });
+    const data: {
+      ok: boolean;
+      markdown?: string;
+      structure?: { sections: number; totalMarks: number; years: string };
+      error?: string;
+    } = await response.json();
+    if (!data.ok || !data.markdown) throw new Error(data.error || "Mock test nahi ban paaya.");
+
+    // Echo what was actually measured in their papers, so "same pattern" is
+    // a checkable claim rather than a promise.
+    if (data.structure) {
+      setMockNote(
+        `Tumhare papers se nikaala gaya pattern: ${data.structure.sections} sections · ${data.structure.totalMarks} marks · ${data.structure.years}`,
+      );
+    }
+    return data.markdown;
+  };
+
+  return (
+    <div className="mt-5 space-y-3 border-t pt-4" style={{ borderColor: "var(--line)" }}>
+      <div>
+        <h3 className="text-sm font-extrabold">📜 Solutions & mock test</h3>
+        <p className="mt-0.5 text-[0.72rem] leading-relaxed text-[var(--muted)]">
+          Pehle apne purane papers ka poora answer key lo, phir usi pattern ka naya paper —
+          structure copy kiya hua, sawaal naye.
+        </p>
+      </div>
+
+      {papers.map((paper) => (
+        <DocPanel
+          key={paper.key}
+          title={`${paper.label} ${paper.year} — ${paper.questions.length} sawaal ke solutions`}
+          subtitle="Uttane hi order me jaise paper me the, working + marks breakdown ke saath."
+          buttonLabel="Solutions banao"
+          filename={`${paper.year}-${paper.label}-solutions`.replace(/[^\w-]+/g, "-").toLowerCase()}
+          onGenerate={() => getSolutions(paper)}
+        />
+      ))}
+
+      <DocPanel
+        title="🧪 Mock test — in papers jaisa exact pattern"
+        subtitle="Sections, sawaalon ki sankhya aur marks-per-question sab tumhare asli papers jaisa. Sawaal naye, topic wahi jo repeat hote hain."
+        buttonLabel="Mock test banao"
+        filename="mock-test"
+        note={
+          mockNote ??
+          (plan.topics && plan.topics.length > 0
+            ? `Topics: ${plan.topics.filter((t) => t.signal.trend === "repeating").length} repeating + ${
+                plan.topics.filter((t) => t.signal.trend === "important").length
+              } important se sawaal honge.`
+            : null)
+        }
+        onGenerate={getMockTest}
+      />
+    </div>
+  );
+}
+
+interface PaperGroup {
+  key: string;
+  label: string;
+  year: string;
+  questions: PyqQuestion[];
+}
+
+/** Buckets questions by the paper they were actually printed in. */
+function groupByPaper(questions: PyqQuestion[]): PaperGroup[] {
+  const map = new Map<string, PaperGroup>();
+  for (const q of questions) {
+    const key = `${q.paperLabel}|${q.paperYear}`;
+    const group = map.get(key) ?? {
+      key,
+      label: q.paperLabel || "Question paper",
+      year: q.paperYear || "",
+      questions: [],
+    };
+    group.questions.push(q);
+    map.set(key, group);
+  }
+  return [...map.values()];
 }
 
 /* -------------------------------------------------------------------------- */

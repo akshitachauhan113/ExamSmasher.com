@@ -91,7 +91,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
             onChange={(e) => onPerTopicChange(Number(e.target.value))}
             className="field w-full px-3 py-2.5 text-sm"
           >
-            {[1, 2, 3, 4, 5, 6, 8].map((n) => (
+            {[2, 3, 4, 6, 8, 10].map((n) => (
               <option key={n} value={n}>
                 {n} best video{n > 1 ? "s" : ""}
               </option>

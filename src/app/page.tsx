@@ -13,7 +13,9 @@ import {
   RefreshIcon,
 } from "@/components/Icons";
 import { ChatWidget } from "@/components/ChatWidget";
+import { CoverageReport } from "@/components/CoverageReport";
 import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
+import { FullNotesPanel } from "@/components/FullNotesPanel";
 import { PlaylistBanner } from "@/components/PlaylistBanner";
 import { SetupBanner } from "@/components/SetupBanner";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
@@ -75,7 +77,9 @@ export default function Home() {
   const [syllabus, setSyllabus] = useState("");
   const [subject, setSubject] = useState("");
   const [language, setLanguage] = useState("hinglish");
-  const [perTopic, setPerTopic] = useState(4);
+  // Default to 6: more videos per topic costs no extra search quota (one
+  // videos.list call already returns 50 ids), and the student asked for depth.
+  const [perTopic, setPerTopic] = useState(6);
 
   /* ------------------------------- results ------------------------------ */
   const [phase, setPhase] = useState<Phase>("idle");
@@ -245,6 +249,8 @@ export default function Home() {
                 subject: courseName,
                 limit: picks,
                 courseVideoId: course[topic.id],
+                examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
+                topicCount: list.length,
               }),
               signal,
             });
@@ -272,7 +278,8 @@ export default function Home() {
       await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
       if (!signal.aborted) setPhase("done");
     },
-    [isStudied],
+    // pyqByTopic feeds exam-worded queries — a new plan must re-create this.
+    [isStudied, pyqByTopic],
   );
 
   /* ------------------------------ playlist ------------------------------- */
@@ -428,6 +435,8 @@ export default function Home() {
             subject: subjectName,
             limit: perTopic,
             courseVideoId: coverageMap(playlist)[topic.id],
+            examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
+            topicCount: topics.length,
           }),
         });
         const data: VideosResponse = await response.json();
@@ -446,7 +455,7 @@ export default function Home() {
         }));
       }
     },
-    [language, subjectName, perTopic, playlist],
+    [language, subjectName, perTopic, playlist, pyqByTopic, topics],
   );
 
   /** Tick/untick a topic. Unticking a skipped topic re-searches its videos. */
@@ -487,6 +496,35 @@ export default function Home() {
     );
     notify("Videos re-matched with your current settings.");
   }, [topics, subjectName, language, perTopic, syllabus, playlist, startMatching, notify]);
+
+  /**
+   * Videos always match BEFORE the papers exist (Exam Mode only appears once
+   * topics are extracted), so the first pass only knows syllabus wording.
+   * Once a plan lands, re-run once with the exam's own words.
+   *
+   * Guarded by a signature of the questions + topics rather than plan object
+   * identity, because changing the time budget rebuilds the plan — and a
+   * slider nudge must not trigger a full re-search of every topic.
+   */
+  const handledPlanRef = useRef<string | null>(null);
+  useEffect(() => {
+    const plan = exam.plan;
+    if (!plan || phase !== "done" || topics.length === 0) return;
+
+    const signature = [
+      plan.subject ?? "",
+      exam.questions.length,
+      (plan.topics ?? []).map((t) => t.topic.id).join(","),
+    ].join("|");
+    if (handledPlanRef.current === signature) return;
+    handledPlanRef.current = signature;
+
+    // Nothing mapped means re-searching would repeat the exact same queries.
+    if (pyqByTopic.size === 0) return;
+
+    notify("🔁 Ab videos dobara PYQ ki language me chal rahi hain — exam jaisa dhoond rahi hoon.");
+    void rematchVideos();
+  }, [exam.plan, exam.questions, phase, topics, pyqByTopic, rematchVideos, notify]);
 
   /** Fills the syllabus box from an uploaded file. */
   const handleFileText = useCallback((text: string, fileName: string) => {
@@ -677,33 +715,34 @@ export default function Home() {
         {phase === "idle" && topics.length === 0 && (
           <section className="mb-8 text-center">
             <h1 className="mx-auto max-w-3xl text-3xl font-extrabold leading-tight sm:text-5xl">
-              Kam time, zyada marks — <span className="gradient-text">exam-first</span> tarike se
-              padho.
+              Chal, milke padhte hain — <span className="gradient-text">kam time me zyada</span>{" "}
+              marks.
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-[var(--muted)] sm:text-base">
-              Apne <strong className="text-[var(--text)]">purane question papers</strong> daalo —
-              ExamSmasher nikaalega ki kaunsa topic har saal aata hai aur kaunsa nahi, phir
-              return-per-minute ke hisaab se batayega kya pehle padhna hai. Uske baad concept ke
-              liye videos, <strong className="text-[var(--text)]">3-level notes</strong>, PYQ
-              practice aur quiz.
+              Sabse pehle apne <strong className="text-[var(--text)]">purane question papers</strong>{" "}
+              phenk de. Main unhe padh ke batata hoon — kaunsa topic har saal aata hai, kaunsa
+              kabhi nahi aaya — phir tujhe ek clear order deta hoon:{" "}
+              <em>pehle ye kar, ye baad me, ye chhod de.</em> Uske andar concept ke liye videos,{" "}
+              <strong className="text-[var(--text)]">3-level notes</strong>, PYQ ke solutions, mock
+              test aur quiz. Bas tu padh, baaki sambhal lunga.
             </p>
 
             <div className="mx-auto mt-7 grid max-w-4xl gap-3 sm:grid-cols-3">
               {[
                 {
                   icon: <span className="text-lg">🎯</span>,
-                  title: "Exam Mode — real papers se trend",
-                  body: "2-3 purane papers upload karo. Kaunsa topic repeats hai, kitne marks ka hai, kya nahi aata — sab asli data se, guess se nahi.",
+                  title: "Tere papers se hi trend nikaale",
+                  body: "2-3 purane papers daal — kaunsa topic repeat hota hai, kitne marks ka hai, kya aata hi nahi, sab tere asli data se. Guess nahi.",
                 },
                 {
                   icon: <span className="text-lg">⏳</span>,
-                  title: "Priority by return per minute",
-                  body: "Bol de kitna time hai — plan batayega must-do topics kaunse hain, har ek ko uske hisaab ke minutes baantega.",
+                  title: "Bol de kitna time hai",
+                  body: "1 din ya 2 hafta — plan utna hi banega. Har topic ko uske hisaab ke minutes milenge, must-do wale sabse upar.",
                 },
                 {
                   icon: <span className="text-lg">📚</span>,
-                  title: "3-level notes + PYQ + quiz",
-                  body: "Detailed (concept) → short bullets (revision) → flashcards. Plus asli past questions solve karo aur quiz se khud check karo.",
+                  title: "Padho, solve karo, revise karo",
+                  body: "Detailed notes se samajh → short bullets + flashcards se revise → PYQ solve → mock test se check. Poori circle, ek jagah.",
                 },
               ].map((feature) => (
                 <div key={feature.title} className="card p-4 text-left">
@@ -838,6 +877,9 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Whole syllabus as one long document — read it like a textbook */}
+            <FullNotesPanel syllabus={syllabus} subject={subjectName} />
+
             {/* Exam Mode — real past papers -> priority plan, PYQs, expected questions, quiz */}
             <ExamMode
               topics={topics}
@@ -875,6 +917,16 @@ export default function Home() {
                   );
                   notify("Playlist se videos dobara match ho rahe hain…");
                 }}
+              />
+            )}
+
+            {/* Honest gap list — named topics, their own PYQs, no silent empty panels */}
+            {phase === "done" && (
+              <CoverageReport
+                topics={displayTopics}
+                results={results}
+                pyqByTopic={pyqByTopic}
+                onJumpToTopic={jumpTo}
               />
             )}
 

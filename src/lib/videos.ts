@@ -3,7 +3,12 @@ import { generateJSON, getLlmConfig } from "./llm";
 import { buildRankPrompt } from "./prompts";
 import { mergeAiVerdicts, scoreCandidate, type AiVerdict } from "./scoring";
 import type { ScoredVideo, Topic, TopicResult, VideoCandidate } from "./types";
-import { fetchTranscript, fetchVideoDetails, searchYouTube } from "./youtube";
+import {
+  assertQuotaAvailable,
+  fetchTranscript,
+  fetchVideoDetails,
+  searchYouTube,
+} from "./youtube";
 
 export interface AnalyzeTopicOptions {
   /** Language code from the UI ("en", "hinglish", "hi", ...). */
@@ -19,6 +24,32 @@ export interface AnalyzeTopicOptions {
    * a large boost, so following one consistent playlist stays possible.
    */
   courseVideoId?: string;
+  /**
+   * Real past questions that fall on this topic. They are woven into the
+   * search queries so YouTube is asked the way the exam actually words things
+   * ("derive Dijkstra's algorithm 8 marks"), not just the syllabus heading —
+   * exam-worded videos teach the thing the student will be marked on.
+   */
+  examQuestions?: string[];
+  /**
+   * Total topics in this run. Query spend is split across them so a
+   * 40-topic syllabus gives every topic one search instead of the first
+   * 20 getting four each and the rest never being asked at all.
+   */
+  topicCount?: number;
+}
+
+/**
+ * YouTube's daily quota is 10,000 units; one search costs 100. That is
+ * ~70 searches a day (playlist lookup eats ~4 of them). Anything past that
+ * is quota the student does not have, so spend it on breadth — cover every
+ * topic once — before depth on any one topic.
+ */
+const TOTAL_SEARCH_BUDGET = 70;
+
+function queryBudgetFor(topicCount: number): number {
+  const share = Math.floor(TOTAL_SEARCH_BUDGET / Math.max(1, topicCount));
+  return Math.max(1, Math.min(4, share));
 }
 
 const CACHE_TTL = 20 * 60 * 1000;
@@ -33,20 +64,50 @@ const cache = new Map<string, { ts: number; value: TopicResult }>();
  */
 const PLAYLIST_BONUS = 30;
 
-export function buildQueries(topic: Topic, subject: string, language: LanguageOption): string[] {
+/**
+ * Builds the YouTube search queries for a topic.
+ *
+ * `examQuestions` (real past questions on this topic) get their own query in
+ * the student's own exam wording. That matters: "Unit 3 — Graphs" and
+ * "explain Kruskal's algorithm with 6 marks example" are the same topic but
+ * surface different, exam-shaped videos.
+ *
+ * `budget` caps the fan-out. Each query is 100 quota units, so on a large
+ * syllabus a 2-query-per-topic fan-out dies before the last topics are
+ * searched at all — a single strong query beats four that never run.
+ */
+export function buildQueries(
+  topic: Topic,
+  subject: string,
+  language: LanguageOption,
+  examQuestions: string[] = [],
+  budget: number = 4,
+): string[] {
   const core = [topic.title, ...topic.keywords.slice(0, 3)].filter(Boolean).join(" ").trim();
   const subjectSuffix = subject ? ` ${subject}` : "";
 
   const queries: string[] = [];
-  const primary = `${core}${subjectSuffix}${language.queryHint ? ` ${language.queryHint}` : ""}`.trim();
-  queries.push(primary);
+  const push = (q: string) => {
+    const clean = q.trim().replace(/\s+/g, " ");
+    if (clean.length < 4 || queries.length >= budget) return;
+    if (queries.some((existing) => existing.toLowerCase() === clean.toLowerCase())) return;
+    queries.push(clean);
+  };
 
-  // A second, differently shaped query buys recall: shorter title + "tutorial".
+  push(
+    `${core}${subjectSuffix}${language.queryHint ? ` ${language.queryHint}` : ""}`.trim(),
+  );
+
+  // Exam wording first among the extras — it is the most specific signal.
+  const examQuery = examQuestions[0]?.slice(0, 110);
+  if (examQuery) push(`${examQuery}${subjectSuffix}`);
+
+  // A differently shaped query buys recall: shorter title + "tutorial".
   const shortTitle = topic.title.split(/[:\-–—(]/)[0].trim();
-  const secondary = `${shortTitle} tutorial explained${subjectSuffix}`.trim();
-  if (secondary.toLowerCase() !== primary.toLowerCase()) queries.push(secondary);
+  push(`${shortTitle} tutorial explained${subjectSuffix}`.trim());
+  push(`${shortTitle} explained${subjectSuffix}`.trim());
 
-  return queries.slice(0, 2);
+  return queries;
 }
 
 /** Runs the full pipeline for ONE topic: search -> details -> transcript -> AI rank. */
@@ -56,12 +117,14 @@ export async function analyzeTopic(
 ): Promise<TopicResult> {
   const language = findLanguage(options.languageCode);
   const limit = Math.min(10, Math.max(1, options.limit));
+  const examFingerprint = (options.examQuestions?.[0] ?? "").slice(0, 60).toLowerCase();
   const cacheKey = [
     topic.title,
     options.languageCode,
     limit,
     options.useAi ? "ai" : "noai",
     options.courseVideoId ?? "-",
+    examFingerprint,
   ].join("|");
 
   const hit = cache.get(cacheKey);
@@ -71,10 +134,11 @@ export async function analyzeTopic(
     return hit.value;
   }
 
-  const queries = buildQueries(topic, options.subject, language);
+  const budget = queryBudgetFor(options.topicCount ?? 1);
+  const queries = buildQueries(topic, options.subject, language, options.examQuestions, budget);
 
   try {
-    const result = await runPipeline(topic, options, language, queries, limit);
+    const result = await runPipeline(topic, options, language, queries, limit, budget);
     if (cache.size >= MAX_CACHE_ENTRIES) {
       const oldest = cache.keys().next().value;
       if (oldest) cache.delete(oldest);
@@ -101,15 +165,22 @@ async function runPipeline(
   language: LanguageOption,
   queries: string[],
   limit: number,
+  budget: number,
 ): Promise<TopicResult> {
+  // Fail fast when the daily quota is already gone. Every remaining topic
+  // then returns the same clear message instead of burning a 100-unit search
+  // to discover what we already know — and the UI can name what was missed.
+  assertQuotaAvailable();
+
   // 1. Search with every query variation (parallel, small fan-out).
   const allQueries = [...queries];
   const ids = await searchIds(queries, language);
 
-  // 1b. Thin results? Broaden once with plain title queries — a topic panel
-  //     with zero videos is the worst outcome for the student.
-  if (ids.length < limit * 3) {
+  // 1b. Thin results? Broaden with plain title queries — but only inside the
+  //     budget, so the LAST topics still get their one guaranteed search.
+  if (ids.length < limit * 3 && allQueries.length < budget) {
     const shortTitle = topic.title.split(/[:\-–—(]/)[0].trim();
+    const room = budget - allQueries.length;
     const broad = [topic.title, `${shortTitle} explained`, `${shortTitle} full tutorial`]
       .map((q) => q.trim())
       .filter(
@@ -117,7 +188,7 @@ async function runPipeline(
           q.length > 3 &&
           !allQueries.some((existing) => existing.toLowerCase() === q.toLowerCase()),
       )
-      .slice(0, 2);
+      .slice(0, room);
 
     if (broad.length > 0) {
       const extra = await searchIds(broad, language);
@@ -133,10 +204,12 @@ async function runPipeline(
 
   // 2. Pull real statistics + duration + captions flag.
   //    The playlist pick is always fetched too, even when search found nothing —
-  //    a verified syllabus match beats an empty panel.
+  //    a verified syllabus match beats an empty panel. videos.list takes up to
+  //    50 ids and costs 1 unit, so asking for the full set is nearly free and
+  //    is what makes a high "videos per topic" selection actually satisfiable.
   const detailIds = options.courseVideoId
-    ? [...new Set([options.courseVideoId, ...ids])].slice(0, 40)
-    : ids.slice(0, 40);
+    ? [...new Set([options.courseVideoId, ...ids])].slice(0, 50)
+    : ids.slice(0, 50);
 
   const details = await fetchVideoDetails(detailIds);
   const usable = details
@@ -153,7 +226,10 @@ async function runPipeline(
     .map((v) => scoreCandidate(topic, v, null))
     .sort((a, b) => b.heuristicScore - a.heuristicScore);
 
-  const shortlist = prelim.slice(0, 12);
+  // With up to 10 videos requested, a 12-deep shortlist meant the top 10 were
+  // almost no contest — raising it to 20 gives the ranking pass real
+  // competition, which is where the extra videos per topic come from.
+  const shortlist = prelim.slice(0, 20);
   if (options.courseVideoId && !shortlist.some((e) => e.video.id === options.courseVideoId)) {
     const fromPlaylist = prelim.find((e) => e.video.id === options.courseVideoId);
     if (fromPlaylist) shortlist.push(fromPlaylist);
@@ -261,7 +337,7 @@ async function fetchTranscriptsFor(
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   // Only the most promising candidates are worth a caption download.
-  const withCaptions = entries.filter((e) => e.video.hasCaptions).slice(0, 6);
+  const withCaptions = entries.filter((e) => e.video.hasCaptions).slice(0, 8);
 
   await mapWithConcurrency(withCaptions, 3, async (entry) => {
     const result = await fetchTranscript(entry.video.id, languageCode, 7000);
@@ -298,7 +374,9 @@ async function rankWithAi(
   const parsed = await generateJSON<{ videos?: AiVerdict[] }>(prompt, {
     system,
     temperature: 0.1,
-    maxOutputTokens: 2048,
+    // 20 candidates with a "why" line each needs more room than the old
+    // 12-deep shortlist did — otherwise the verdict list gets cut off mid-rank.
+    maxOutputTokens: 4096,
   });
 
   return (parsed.videos ?? []).filter((v) => typeof v?.id === "string");

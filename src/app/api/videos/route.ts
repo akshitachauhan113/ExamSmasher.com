@@ -9,6 +9,8 @@ export async function POST(request: Request): Promise<Response> {
     subject?: unknown;
     limit?: unknown;
     courseVideoId?: unknown;
+    examQuestions?: unknown;
+    topicCount?: unknown;
   } | null;
 
   const topic = normalizeTopic(body?.topic);
@@ -37,12 +39,27 @@ export async function POST(request: Request): Promise<Response> {
       ? body.courseVideoId
       : undefined;
 
+  // Real past questions on this topic, so search uses exam wording.
+  const examQuestions = Array.isArray(body?.examQuestions)
+    ? body.examQuestions
+        .filter((q): q is string => typeof q === "string" && q.trim().length > 5)
+        .map((q) => q.trim().slice(0, 200))
+        .slice(0, 5)
+    : [];
+
+  // Used to split the shared YouTube query budget across this run's topics.
+  const topicCount = Number.isFinite(Number(body?.topicCount))
+    ? Math.min(200, Math.max(1, Math.round(Number(body?.topicCount))))
+    : undefined;
+
   const result = await analyzeTopic(topic, {
     languageCode,
     subject,
     limit,
     useAi,
     courseVideoId,
+    examQuestions,
+    topicCount,
   });
 
   const response: VideosResponse = { ok: true, result };

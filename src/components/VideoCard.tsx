@@ -181,24 +181,25 @@ export function VideoCard({ entry, index, topicTitle, languageCode, onPlay }: Vi
             )}
           </div>
 
-          {entry.transcriptSnippet && (
-            <details className="mt-2">
-              <summary className="cursor-pointer select-none text-xs font-semibold text-[var(--muted)] hover:text-[var(--text)]">
-                Peek at what the video actually says
-              </summary>
-              <p className="mt-1.5 rounded-lg bg-[var(--surface-2)] p-2.5 text-xs italic leading-relaxed text-[var(--muted)]">
-                “{entry.transcriptSnippet}…”
-              </p>
-            </details>
-          )}
-
-          {/* AI summary of what this video actually teaches */}
+          {/* Sits right under the actions, so a student sees the option to
+              "read instead of watch" BEFORE committing 20 minutes. */}
           <VideoSummaryBox
             videoId={video.id}
             videoTitle={video.title}
             topicTitle={topicTitle}
             languageCode={languageCode}
           />
+
+          {entry.transcriptSnippet && (
+            <details className="mt-2">
+              <summary className="cursor-pointer select-none text-xs font-semibold text-[var(--muted)] hover:text-[var(--text)]">
+                Transcript se jhaank lo — sach me kya bol raha hai
+              </summary>
+              <p className="mt-1.5 rounded-lg bg-[var(--surface-2)] p-2.5 text-xs italic leading-relaxed text-[var(--muted)]">
+                “{entry.transcriptSnippet}…”
+              </p>
+            </details>
+          )}
         </div>
       </div>
     </article>

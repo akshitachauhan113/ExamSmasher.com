@@ -235,6 +235,69 @@ Return EXACTLY this JSON shape:
   return { system, prompt };
 }
 
+/* --------------------------- whole-syllabus notes --------------------------- */
+
+export interface FullNotesInput {
+  subject: string;
+  /** The slice of syllabus this call should cover. */
+  section: string;
+  /** 1-based, so a multi-section document reads as one continuous book. */
+  sectionIndex: number;
+  totalSections: number;
+  /** Unit/chapter label if we could detect one for this slice. */
+  sectionLabel?: string;
+}
+
+/**
+ * One chapter-worth of long-form notes.
+ *
+ * Whole syllabi do not fit in one model response, so the route splits the
+ * syllabus into slices and calls this per slice. Each slice is told its index
+ * so headings continue rather than every section claiming to be "#1".
+ * Output is Markdown, not JSON — this is a document to read, not data.
+ */
+export function buildFullNotesPrompt(input: FullNotesInput): {
+  system: string;
+  prompt: string;
+} {
+  const system = `You are a university professor writing complete, exam-ready course notes.
+You teach properly: define, explain, work through, then say what the exam asks.
+Reply in clean Markdown ONLY. No preamble, no "here are your notes", no code fences around the whole answer.`;
+
+  const prompt = `Write detailed study notes for the section below of "${input.subject}".
+
+${
+  input.totalSections > 1
+    ? `This is part ${input.sectionIndex} of ${input.totalSections}${
+        input.sectionLabel ? ` — "${input.sectionLabel}"` : ""
+      }. Start with a level-2 heading for this part only. Do not reference other parts.`
+    : `Cover everything given.`
+}
+
+SYLLABUS FOR THIS SECTION:
+"""
+${input.section.slice(0, 11000)}
+"""
+
+WHAT TO PRODUCE:
+- A level-2 heading, then every syllabus point taught in depth.
+- For each concept: what it means, WHY it exists, how it works step by step,
+  then the formula/algorithm/procedure worked through concretely.
+- Use level-3 headings to split concepts. Bullets for anything list-shaped
+  (steps, types, comparisons, properties).
+- Include a short worked example wherever a calculation or derivation is involved.
+- Keep it inside the syllabus: do not add topics that are not asked for.
+- Plain, direct teaching language. No "in this chapter we shall explore".
+- If the syllabus mentions marks or weightage, say at the end which parts are
+  most likely to be asked and why.
+
+END EACH SECTION WITH:
+### Exam corner
+- 3 to 5 bullets: what is usually asked, common traps, what to memorise.`;
+
+  return { system, prompt };
+}
+
 /* ------------------------------- exam mode -------------------------------- */
 
 export interface ParsePapersInput {
@@ -497,6 +560,144 @@ diagram descriptions, formulae). For numericals, show the working.
 **Key points** — bullet list of what earns marks.
 **Common mistake** — one line on how students usually lose marks here.
 **How to revise this** — one line pointing at what to memorise.`;
+
+  return { system, prompt };
+}
+
+/* ------------------------- solutions & mock paper ------------------------- */
+
+export interface SolutionsInput {
+  subject: string;
+  /** One paper's questions, in the order they were printed. */
+  paper: { label: string; year: string; questions: Array<{ text: string; marks?: number; number?: string }> };
+}
+
+/**
+ * Writes worked solutions for a batch of ONE paper's questions.
+ *
+ * Batched rather than one-at-a-time so a 25-question paper is not 25 round
+ * trips — but still per paper, so the answer key stays in the order the student
+ * actually sat down with.
+ */
+export function buildSolutionsPrompt(input: SolutionsInput): {
+  system: string;
+  prompt: string;
+} {
+  const lines = input.paper.questions
+    .map((q, i) => `${i + 1}. ${q.number ? `[${q.number}] ` : ""}${q.marks ? `(${q.marks} marks) ` : ""}${q.text}`)
+    .join("\n");
+
+  const system = `You are the examiner who set this paper and now write the official answer key.
+You show working, not just results, and you are honest about where marks are actually awarded.
+Reply in clean Markdown ONLY — no preamble, no code fences around the whole answer.`;
+
+  const prompt = `Write the complete solution key for this paper.
+
+SUBJECT: ${input.subject}
+PAPER: ${input.paper.label} ${input.paper.year}
+
+QUESTIONS:
+${lines}
+
+RULES:
+1. Answer EVERY question in the list, in the same order, numbered to match.
+2. Structure each answer the way an examiner expects: steps, labelled points,
+   formulae substituted with values, diagram descriptions where asked.
+3. For numericals and derivations, SHOW the working — a student must be able to
+   copy the method.
+4. After each answer add one line: **Marks** — a compact breakdown of where the
+   marks go (e.g. "setup 2 · working 3 · result 1"). Only if marks were given.
+5. For objective/short questions, be brief — do not pad a 1-mark answer.
+6. Keep answers technically correct for a university level. If a question is
+   genuinely ambiguous, say so in one line rather than inventing certainty.
+7. Finish with "### Common mistakes in this paper" — 3 to 5 bullets on where
+   students typically lose marks in THESE questions.`;
+
+  return { system, prompt };
+}
+
+export interface MockTestInput {
+  subject: string;
+  /** Structural fingerprint lifted from the real papers. */
+  structure: {
+    /** e.g. ["Section A (10 × 2 marks)", "Section B (4 × 6 marks)"] */
+    sections: Array<{ name: string; count: number; marksEach: number; type: string }>;
+    totalMarks: number;
+    years: string;
+  };
+  /** High-yield topics the real papers keep returning to. */
+  topics: Array<{ title: string; trend: string; pastQuestions: string[] }>;
+}
+
+/**
+ * Builds a mock paper that mirrors the student's REAL papers — same sections,
+ * same question counts, same marks-per-question, same question mix — but with
+ * fresh questions on the topics their papers actually repeat.
+ *
+ * This is explicitly a practice paper built from a pattern, never a leak, and
+ * it always ships with its own solutions.
+ */
+export function buildMockTestPrompt(input: MockTestInput): {
+  system: string;
+  prompt: string;
+} {
+  const structureLines = input.structure.sections
+    .map((s) => `- ${s.name}: ${s.count} question(s), ${s.marksEach} marks each — ${s.type}`)
+    .join("\n");
+
+  const topicLines = input.topics
+    .map(
+      (t, i) =>
+        `${i + 1}. ${t.title} [${t.trend}]\n` +
+        (t.pastQuestions.length
+          ? t.pastQuestions.map((q) => `   asked before: ${q.slice(0, 220)}`).join("\n")
+          : "   (no past question on record)"),
+    )
+    .join("\n");
+
+  const system = `You are a university examiner setting a practice paper that must feel identical in
+structure to the student's own past papers. You never present it as anything but practice.
+Reply in clean Markdown ONLY — no preamble, no code fences around the whole answer.`;
+
+  const prompt = `Set ONE practice paper for "${input.subject}" plus its full solutions.
+
+SOURCE PAPERS: ${input.structure.years}
+TOTAL MARKS TO MATCH: ${input.structure.totalMarks}
+
+STRUCTURE TO COPY EXACTLY:
+${structureLines}
+
+TOPICS THE REAL PAPERS KEEP RETURNING TO:
+${topicLines}
+
+HOW TO BUILD IT:
+1. Match the structure exactly: same section names, same number of questions per
+   section, same marks per question, same total marks. The student should not be
+   able to tell the pattern apart from their real exam.
+2. Aim the questions at the repeating/important topics above. Weight them roughly
+   as those topics are actually weighted in the past papers.
+3. Vary the question style within each section (defination, explanation,
+   application, numerical/derivation) as the past papers do.
+4. Every question must be answerable from the syllabus given below — no invented
+   out-of-scope content.
+5. NEW wording — do not copy any past question verbatim. Same concepts, fresh phrasing.
+
+OUTER SYLLABUS (do not go outside this):
+"""
+${(input.topics.map((t) => t.title).join(" · ")).slice(0, 1500)}
+"""
+
+OUTPUT FORMAT (Markdown):
+## 📝 Mock test — structure same as your papers
+Then each section as a level-3 heading (Section A, Section B, ... as the source
+papers call them), with numbered questions and "[N marks]" after each.
+
+Then:
+## ✅ Solutions
+Numbered to match, each answer showing the method. For numericals show the working.
+End with:
+### What to focus on before the real exam
+- 4 to 6 bullets naming the highest-yield parts of THIS paper.`;
 
   return { system, prompt };
 }

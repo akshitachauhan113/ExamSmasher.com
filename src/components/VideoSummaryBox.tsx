@@ -58,15 +58,25 @@ export function VideoSummaryBox({
   };
 
   return (
-    <div className="mt-2.5">
+    <div className="mt-2">
       <button
         type="button"
         onClick={() => (open ? setOpen(false) : void load())}
-        className="flex items-center gap-1.5 text-xs font-bold"
-        style={{ color: "var(--brand)" }}
+        className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold transition-colors"
+        style={{
+          background: open
+            ? "var(--brand)"
+            : "color-mix(in srgb, var(--brand) 10%, transparent)",
+          color: open ? "var(--brand-contrast, #fff)" : "var(--brand)",
+        }}
+        aria-expanded={open}
       >
         <BotIcon width={13} height={13} />
-        {open ? "Hide AI summary" : data?.ok ? "AI summary" : "Summarise this video"}
+        {open
+          ? "Band karo"
+          : data?.ok
+            ? "Phir se summary dekho"
+            : "🧠 Pehle summary padh lo — kya hai is video me?"}
       </button>
 
       {open && (
@@ -80,7 +90,7 @@ export function VideoSummaryBox({
               <div className="skeleton h-3 w-full rounded" />
               <div className="skeleton h-3 w-5/6 rounded" />
               <p className="pt-1 text-xs text-[var(--muted)]">
-                Reading the transcript and summarising…
+                Video ki transcript padh kar samajh raha hoon…
               </p>
             </div>
           )}
