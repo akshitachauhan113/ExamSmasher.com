@@ -287,3 +287,27 @@ body {
   border-top: 1px solid var(--line);
   margin: 1rem 0;
 }
+
+/* ---------- Equations — typeset like a notebook, not raw LaTeX ---------- */
+
+.plan-markdown .katex,
+.math-block .katex {
+  color: var(--text);
+  font-size: 1.06em;
+}
+.math-block {
+  margin: 0.7rem 0;
+  padding: 0.15rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.katex-display {
+  margin: 0.35rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.math-fallback,
+.math-fallback-block {
+  font-family: var(--font-geist-mono), monospace;
+  color: var(--warn);
+}

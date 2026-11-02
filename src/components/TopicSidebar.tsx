@@ -1,6 +1,7 @@
 "use client";
 
-import type { Topic, TopicResult } from "@/lib/types";
+import type { ExamTopic, Topic, TopicResult } from "@/lib/types";
+import { BAND_LABEL } from "@/lib/exam";
 import { AlertIcon, BookIcon, CheckIcon } from "./Icons";
 
 interface TopicSidebarProps {
@@ -8,18 +9,20 @@ interface TopicSidebarProps {
   results: Record<string, TopicResult>;
   activeId: string | null;
   onJump: (id: string) => void;
-  phase: "idle" | "analyzing" | "matching" | "done";
+  phase: "idle" | "analyzing" | "papers" | "matching" | "done";
   completed: number;
   videoCount: number;
   studiedCount: number;
   isStudied: (title: string) => boolean;
   onToggleStudied: (title: string) => void;
+  /** Must / Might / Can skip — PYQ trend when available, else syllabus importance. */
+  bandFor: (topic: Topic) => ExamTopic["band"];
 }
 
-const IMPORTANCE_STYLE: Record<string, { label: string; color: string }> = {
-  core: { label: "core", color: "var(--bad)" },
-  important: { label: "important", color: "var(--warn)" },
-  bonus: { label: "bonus", color: "var(--muted)" },
+const BAND_STYLE: Record<ExamTopic["band"], string> = {
+  must: "var(--bad)",
+  should: "var(--warn)",
+  "if-time": "var(--muted)",
 };
 
 export function TopicSidebar({
@@ -33,6 +36,7 @@ export function TopicSidebar({
   studiedCount,
   isStudied,
   onToggleStudied,
+  bandFor,
 }: TopicSidebarProps) {
   const matchPercent = topics.length ? Math.round((completed / topics.length) * 100) : 0;
   const studyPercent = topics.length ? Math.round((studiedCount / topics.length) * 100) : 0;
@@ -96,6 +100,7 @@ export function TopicSidebar({
 
         <p className="mt-3 text-xs text-[var(--muted)]">
           {phase === "analyzing" && "Reading your syllabus with AI…"}
+          {phase === "papers" && "Topics ready — ab PYQ importance ka step, ya seedha videos."}
           {phase === "matching" && "Searching & matching videos, one topic at a time…"}
           {phase === "done" &&
             (studiedCount === topics.length
@@ -108,7 +113,7 @@ export function TopicSidebar({
             const result = results[topic.id];
             const isActive = activeId === topic.id;
             const done = isStudied(topic.title);
-            const importance = IMPORTANCE_STYLE[topic.importance] ?? IMPORTANCE_STYLE.important;
+            const band = bandFor(topic);
 
             return (
               <li key={topic.id}>
@@ -148,9 +153,10 @@ export function TopicSidebar({
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span
                             className="text-[0.66rem] font-bold uppercase tracking-wide"
-                            style={{ color: importance.color }}
+                            style={{ color: BAND_STYLE[band] }}
+                            title="Must / Might / Can skip"
                           >
-                            ● {importance.label}
+                            ● {BAND_LABEL[band].replace(/^\S+\s/, "")}
                           </span>
                           <span className="text-[0.68rem] text-[var(--muted)]">
                             {topic.difficulty}

@@ -107,6 +107,7 @@ export interface NotesBundle {
   cards: Flashcard[];
 }
 
+/** Notes for one topic, plus a cheap "how much is already saved" hint. */
 export interface NotesResponse {
   ok: boolean;
   detailed?: DetailedSection[];
@@ -114,6 +115,9 @@ export interface NotesResponse {
   cards?: Flashcard[];
   error?: string;
 }
+
+/** Which language study material is written in — the student picks one. */
+export type NotesLang = "english" | "hinglish";
 
 /** AI summary of one video, based on its transcript when available. */
 export interface VideoSummary {
@@ -240,6 +244,34 @@ export interface PyqPaper {
   year: string;
   label: string;
   questionCount: number;
+}
+
+/* --------------------------- solved paper (PYQ + answers) --------------------------- */
+
+export type QuestionDifficulty = "easy" | "medium" | "hard";
+
+/** One solved question: model answer sitting right under its question. */
+export interface SolutionEntry {
+  /** 1-based index of the question in the list the client sent. */
+  index: number;
+  /** Markdown answer, written the way an examiner wants to see it. */
+  answer: string;
+  difficulty: QuestionDifficulty;
+  /** True when the pattern behind this question keeps repeating in exams. */
+  important: boolean;
+}
+
+/** Every question of one paper, solved and tagged. */
+export interface SolvedPaper {
+  label: string;
+  year: string;
+  entries: SolutionEntry[];
+}
+
+export interface SolutionsResponse {
+  ok: boolean;
+  papers?: SolvedPaper[];
+  error?: string;
 }
 
 /** How a single topic showed up across the uploaded papers. */

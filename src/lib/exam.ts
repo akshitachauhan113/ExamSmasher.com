@@ -330,9 +330,9 @@ function clamp01(n: number): number {
 
 /** Short human labels, reused across the exam UI. */
 export const BAND_LABEL: Record<ExamTopic["band"], string> = {
-  must: "🎯 Must do",
-  should: "👍 Should do",
-  "if-time": "⏳ If you get time",
+  must: "🔥 Must",
+  should: "👍 Might",
+  "if-time": "⏭️ Can skip",
 };
 
 export const TREND_LABEL: Record<TopicExamSignal["trend"], string> = {

@@ -26,6 +26,7 @@ export async function POST(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => null)) as {
     syllabus?: unknown;
     subject?: unknown;
+    language?: unknown;
   } | null;
 
   const syllabus =
@@ -67,10 +68,11 @@ export async function POST(request: Request): Promise<Response> {
       : "this course";
 
   const sections = splitSyllabus(syllabus);
+  const language = body?.language === "hinglish" ? ("hinglish" as const) : ("english" as const);
 
   try {
     const parts = await mapWithConcurrency(sections, 3, (section, index) =>
-      writeSection(subject, section.text, section.label, index + 1, sections.length),
+      writeSection(subject, section.text, section.label, index + 1, sections.length, language),
     );
 
     // Each part opens with its own heading (the prompt requires one), so parts
@@ -111,6 +113,7 @@ async function writeSection(
   label: string | undefined,
   index: number,
   total: number,
+  language: "english" | "hinglish",
 ): Promise<string> {
   const { system, prompt } = buildFullNotesPrompt({
     subject,
@@ -118,6 +121,7 @@ async function writeSection(
     sectionIndex: index,
     totalSections: total,
     sectionLabel: label,
+    language,
   });
 
   const out = await generateText(prompt, {

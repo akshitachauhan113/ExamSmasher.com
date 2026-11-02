@@ -1,19 +1,30 @@
 /**
  * A deliberately small Markdown renderer for the AI study-plan output.
- * Supports headings, bold/italic/inline code, links, lists, tables and rules.
+ * Supports headings, bold/italic/inline code, links, lists, tables, rules
+ * and LaTeX equations ($...$ / $$...$$ typeset with KaTeX, notebook style).
  * Everything is HTML-escaped first, so model output cannot inject markup.
  */
 
-const ESCAPES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
+import { escapeHtml, renderTex, replaceMath } from "./math";
 
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (ch) => ESCAPES[ch] ?? ch);
+/**
+ * Math is pulled out BEFORE escaping and markdown formatting, parked behind a
+ * NUL-delimited placeholder, and written back as KaTeX HTML afterwards —
+ * so an exponent inside `$x^2$` never becomes `<sup>` and a `<` inside
+ * `\alpha < 1` never becomes an HTML tag.
+ */
+function parkMath(text: string): { text: string; math: string[] } {
+  const math: string[] = [];
+  const parked = replaceMath(text, (tex, displayMode) => {
+    const token = `\u0000M${math.length}\u0000`;
+    math.push(renderTex(tex, displayMode));
+    return token;
+  });
+  return { text: parked, math };
+}
+
+function unparkMath(html: string, math: string[]): string {
+  return html.replace(/\u0000M(\d+)\u0000/g, (_m, index: string) => math[Number(index)] ?? "");
 }
 
 function isSafeUrl(url: string): boolean {
@@ -30,14 +41,15 @@ function splitRow(row: string): string[] {
 }
 
 function inline(text: string): string {
-  let out = escapeHtml(text);
+  const { text: parked, math } = parkMath(text.replace(/\u0000/g, ""));
+  let out = escapeHtml(parked);
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) =>
     isSafeUrl(url) ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>` : label,
   );
-  return out;
+  return unparkMath(out, math);
 }
 
 export function renderMarkdown(markdown: string): string {
@@ -60,6 +72,32 @@ export function renderMarkdown(markdown: string): string {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
+    const trimmed = line.trim();
+
+    // Display equation — $$...$$ or \[...\], on one line or several.
+    if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
+      closeLists();
+      const closer = trimmed.startsWith("$$") ? "$$" : "\\]";
+      let tex = trimmed.slice(2);
+      if (tex.endsWith(closer)) {
+        tex = tex.slice(0, -closer.length);
+        // Single-line equation — consume this line or the loop never advances.
+        i++;
+      } else {
+        i++;
+        while (i < lines.length && !lines[i].includes(closer)) {
+          tex += `${tex ? "\n" : ""}${lines[i]}`;
+          i++;
+        }
+        if (i < lines.length) {
+          const closing = lines[i].trim();
+          tex += `${tex ? "\n" : ""}${closing.slice(0, closing.lastIndexOf(closer))}`;
+          i++;
+        }
+      }
+      out.push(`<div class="math-block">${renderTex(tex, true)}</div>`);
+      continue;
+    }
 
     // Table: header row followed by a |---| separator row.
     if (

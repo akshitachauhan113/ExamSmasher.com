@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import type { NotesLang } from "@/lib/types";
 import { downloadFile } from "@/lib/exporters";
 import { renderMarkdown } from "@/lib/markdown";
+import { useNotesLang } from "@/lib/notesLang";
 import { AlertIcon, BookIcon, CopyIcon, DownloadIcon } from "./Icons";
+import { NotesLangToggle } from "./NotesLangToggle";
 
 interface FullNotesProps {
   syllabus: string;
@@ -28,14 +31,19 @@ interface FullNotesResponse {
 export function FullNotesPanel({ syllabus, subject }: FullNotesProps) {
   const [open, setOpen] = useState(false);
   const [markdown, setMarkdown] = useState<string | null>(null);
+  /** Which language the current markdown was written in — a flip means rebuild. */
+  const [builtFor, setBuiltFor] = useState<NotesLang | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [lang] = useNotesLang();
+
+  const fresh = markdown !== null && builtFor === lang;
 
   const generate = async () => {
     if (loading) return;
     setOpen(true);
-    if (markdown) return;
+    if (fresh) return;
 
     setLoading(true);
     setError(null);
@@ -43,13 +51,14 @@ export function FullNotesPanel({ syllabus, subject }: FullNotesProps) {
       const response = await fetch("/api/fullnotes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syllabus, subject }),
+        body: JSON.stringify({ syllabus, subject, language: lang }),
       });
       const data: FullNotesResponse = await response.json();
       if (!data.ok || !data.markdown) {
         throw new Error(data.error || "Notes nahi ban paaye.");
       }
       setMarkdown(data.markdown);
+      setBuiltFor(lang);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Notes banate waqt dikkat aa gayi.");
     } finally {
@@ -82,6 +91,7 @@ export function FullNotesPanel({ syllabus, subject }: FullNotesProps) {
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <NotesLangToggle />
           <button
             type="button"
             onClick={() => void generate()}
@@ -93,7 +103,7 @@ export function FullNotesPanel({ syllabus, subject }: FullNotesProps) {
                 <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
                 Likha ja raha hai…
               </>
-            ) : markdown ? (
+            ) : fresh ? (
               <>
                 <BookIcon width={14} height={14} /> Dobara banao
               </>
@@ -103,6 +113,12 @@ export function FullNotesPanel({ syllabus, subject }: FullNotesProps) {
               </>
             )}
           </button>
+
+          {markdown && !fresh && !loading && (
+            <p className="w-full text-right text-[0.65rem] font-semibold" style={{ color: "var(--warn)" }}>
+              Language badal di — Notes banao dabao, nayi language me ban jayenge.
+            </p>
+          )}
 
           {markdown && !loading && (
             <>

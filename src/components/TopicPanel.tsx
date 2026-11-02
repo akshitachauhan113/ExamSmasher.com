@@ -9,12 +9,6 @@ import { PyqPractice } from "./PyqPractice";
 import { TopicNotes } from "./TopicNotes";
 import { VideoCard } from "./VideoCard";
 
-const IMPORTANCE_COLOR: Record<string, string> = {
-  core: "var(--bad)",
-  important: "var(--warn)",
-  bonus: "var(--muted)",
-};
-
 const BAND_COLOR: Record<ExamTopic["band"], string> = {
   must: "var(--bad)",
   should: "var(--warn)",
@@ -33,6 +27,8 @@ interface TopicPanelProps {
   languageCode: string;
   /** Set once Exam Mode has ranked this topic against the real papers. */
   examEntry?: ExamTopic;
+  /** Must / Might / Can skip — from PYQ trend when available, else syllabus. */
+  band: ExamTopic["band"];
   /** Real past questions that map to this topic. */
   pyqQuestions?: PyqQuestion[];
   onToggleStudied: () => void;
@@ -48,6 +44,7 @@ export function TopicPanel({
   syllabus,
   languageCode,
   examEntry,
+  band,
   pyqQuestions,
   onToggleStudied,
   onPlay,
@@ -119,18 +116,22 @@ export function TopicPanel({
             <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">{topic.description}</p>
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {examEntry && (
-              <span
-                className="chip font-bold"
-                style={{
-                  color: BAND_COLOR[examEntry.band],
-                  borderColor: `color-mix(in srgb, ${BAND_COLOR[examEntry.band]} 50%, var(--line))`,
-                }}
-                title="Ranked by how many marks this topic is worth per minute of study"
-              >
-                #{examEntry.priority} {BAND_LABEL[examEntry.band]}
-              </span>
-            )}
+            {/* Must / Might / Can skip — the one tag that decides study order */}
+            <span
+              className="chip font-bold"
+              style={{
+                color: BAND_COLOR[band],
+                borderColor: `color-mix(in srgb, ${BAND_COLOR[band]} 50%, var(--line))`,
+              }}
+              title={
+                examEntry
+                  ? "Ranked by how many marks this topic is worth per minute of study"
+                  : "Syllabus importance — upload past papers for the real exam trend"
+              }
+            >
+              {BAND_LABEL[band]}
+              {examEntry ? ` · #${examEntry.priority}` : ""}
+            </span>
             {examEntry && examEntry.signal.trend !== "rare" && (
               <span className="chip">{TREND_LABEL[examEntry.signal.trend]}</span>
             )}
@@ -138,9 +139,6 @@ export function TopicPanel({
               <span className="chip">{examEntry.signal.totalMarks} marks in papers</span>
             )}
             {topic.chapter && <span className="chip">{topic.chapter}</span>}
-            <span className="chip" style={{ color: IMPORTANCE_COLOR[topic.importance] }}>
-              {topic.importance}
-            </span>
             <span className="chip">{topic.difficulty}</span>
             <span className="chip">~{topic.estimatedMinutes} min</span>
             {examEntry && <span className="chip">plan: {examEntry.minutes} min</span>}

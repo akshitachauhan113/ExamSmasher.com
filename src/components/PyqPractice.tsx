@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { renderMarkdown } from "@/lib/markdown";
 import type { PyqQuestion, Topic } from "@/lib/types";
 import { AlertIcon, RefreshIcon } from "./Icons";
+import { Tex } from "./Tex";
 
 interface PyqPracticeProps {
   topic: Topic;
@@ -125,7 +127,9 @@ function PracticeCard({
         )}
       </div>
 
-      <p className="mt-2 text-[0.88rem] font-semibold leading-relaxed">{question.text}</p>
+      <p className="mt-2 text-[0.88rem] font-semibold leading-relaxed">
+        <Tex text={question.text} />
+      </p>
 
       {/* Active recall: write it out before looking. */}
       <textarea
@@ -197,34 +201,14 @@ function PracticeCard({
         </p>
       )}
 
+      {/* The model answer, exactly as an examiner would write it — headings,
+          steps, and equations typeset instead of raw LaTeX. */}
       {showAnswer && answer && (
         <div
-          className="mt-2.5 rounded-lg p-3 text-[0.82rem] leading-relaxed"
+          className="plan-markdown mt-2.5 rounded-lg p-3 text-[0.82rem] leading-relaxed"
           style={{ background: "var(--surface)" }}
-        >
-          {answer.split("\n").map((line, i) => {
-            const trimmed = line.trim();
-            if (!trimmed) return null;
-            const isHeading = /^\*\*.+\*\*$/.test(trimmed) || /^#{1,3}\s/.test(trimmed);
-            const isBullet = /^[-*•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
-            const clean = trimmed.replace(/\*\*/g, "").replace(/^#{1,3}\s/, "");
-
-            return isHeading ? (
-              <p key={i} className="mt-2 text-[0.75rem] font-extrabold uppercase tracking-wide" style={{ color: "var(--brand)" }}>
-                {clean}
-              </p>
-            ) : isBullet ? (
-              <p key={i} className="mt-1 flex gap-2">
-                <span className="shrink-0" style={{ color: "var(--brand)" }}>•</span>
-                <span>{clean.replace(/^[-*•]\s/, "").replace(/^\d+\.\s/, "")}</span>
-              </p>
-            ) : (
-              <p key={i} className="mt-1.5">
-                {clean}
-              </p>
-            );
-          })}
-        </div>
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(answer) }}
+        />
       )}
 
       {showAnswer && attempt.trim().length > 10 && !answer && !loading && (

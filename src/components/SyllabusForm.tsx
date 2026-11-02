@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { LANGUAGES } from "@/lib/languages";
 import { FileDropzone } from "./FileDropzone";
 import { AlertIcon, GlobeIcon, PlayIcon, RefreshIcon, SearchIcon } from "./Icons";
@@ -27,6 +28,44 @@ interface SyllabusFormProps {
 
 const MAX_CHARS = 24000;
 
+/**
+ * One labelled shelf of the form — like a photo editor's toolbar: the label
+ * sits OUTSIDE the box and tells you what's inside before you touch it, so
+ * the whole form reads top-to-bottom as a sequence instead of a wall of
+ * inputs.
+ */
+function Group({
+  icon,
+  label,
+  hint,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="rounded-2xl border border-dashed p-3"
+      style={{ borderColor: "var(--line)", background: "var(--surface-2)" }}
+    >
+      <p className="mb-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.7rem] font-extrabold uppercase tracking-wider text-[var(--muted)]">
+        <span style={{ color: "var(--brand)" }} aria-hidden>
+          {icon}
+        </span>
+        {label}
+        {hint && (
+          <span className="font-normal normal-case tracking-normal text-[0.68rem]">
+            — {hint}
+          </span>
+        )}
+      </p>
+      {children}
+    </div>
+  );
+}
+
 export function SyllabusForm(props: SyllabusFormProps) {
   const {
     syllabus,
@@ -53,10 +92,10 @@ export function SyllabusForm(props: SyllabusFormProps) {
     <section className="card animate-fade-up p-5 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-extrabold">1 · Paste your syllabus</h2>
+          <h2 className="text-lg font-extrabold">1 · Syllabus daalo</h2>
           <p className="text-sm text-[var(--muted)]">
-            Chapters, unit list, topic names — anything works. The AI will break it into study
-            topics.
+            Chapters, unit list, topic names — kuch bhi chalega. AI padh ke har unit ke alag
+            study topics bana dega.
           </p>
         </div>
         <button type="button" onClick={onLoadSample} className="btn-ghost px-3 py-1.5 text-sm">
@@ -64,80 +103,88 @@ export function SyllabusForm(props: SyllabusFormProps) {
         </button>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
-            <GlobeIcon width={16} height={16} /> Video language
-          </span>
-          <select
-            value={language}
-            onChange={(e) => onLanguageChange(e.target.value)}
+      <div className="mt-4 space-y-3">
+        {/* Shelf 1 — the main input: file OR paste. */}
+        <Group icon="📄" label="Syllabus" hint="file daalo ya seedha text paste karo">
+          <FileDropzone
+            onExtracted={onFileText}
+            onError={onFileError}
+            disabled={busy}
+          />
+
+          <label className="mt-3 block">
+            <span className="mb-1.5 flex items-center justify-between text-sm font-semibold">
+              Ya text paste karo
+              <span
+                className="font-mono text-xs font-normal"
+                style={{ color: tooLong ? "var(--bad)" : "var(--muted)" }}
+              >
+                {syllabus.length}/{MAX_CHARS}
+              </span>
+            </span>
+            <textarea
+              value={syllabus}
+              onChange={(e) => onSyllabusChange(e.target.value)}
+              rows={9}
+              placeholder={`Unit-I: Relations and Functions\n1. Types of relations, equivalence relations, one-one and onto functions…\n\nUnit-II: Algebra\n2. Matrices, determinants…`}
+              className="field w-full resize-y px-3 py-2.5 text-sm leading-relaxed"
+            />
+          </label>
+        </Group>
+
+        {/* Shelf 2 — what kind of videos come back. */}
+        <Group
+          icon="🎥"
+          label="Video settings"
+          hint="kis language ki videos chahiye aur kitni per topic"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
+                <GlobeIcon width={16} height={16} /> Video language
+              </span>
+              <select
+                value={language}
+                onChange={(e) => onLanguageChange(e.target.value)}
+                className="field w-full px-3 py-2.5 text-sm"
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
+                <PlayIcon width={16} height={16} /> Videos per topic
+              </span>
+              <select
+                value={perTopic}
+                onChange={(e) => onPerTopicChange(Number(e.target.value))}
+                className="field w-full px-3 py-2.5 text-sm"
+              >
+                {[2, 3, 4].map((n) => (
+                  <option key={n} value={n}>
+                    {n} best video{n > 1 ? "s" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </Group>
+
+        {/* Shelf 3 — optional context for better matching. */}
+        <Group icon="🏷️" label="Subject" hint="optional — daaloge toh aur sahi match hoga">
+          <input
+            value={subject}
+            onChange={(e) => onSubjectChange(e.target.value)}
+            placeholder="e.g. Physics (JEE Main), Data Structures, UPSC GS2…"
             className="field w-full px-3 py-2.5 text-sm"
-          >
-            {LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
-            <PlayIcon width={16} height={16} /> Videos per topic
-          </span>
-          <select
-            value={perTopic}
-            onChange={(e) => onPerTopicChange(Number(e.target.value))}
-            className="field w-full px-3 py-2.5 text-sm"
-          >
-            {[2, 3, 4, 6, 8, 10].map((n) => (
-              <option key={n} value={n}>
-                {n} best video{n > 1 ? "s" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+          />
+        </Group>
       </div>
-
-      <label className="mt-3 block">
-        <span className="mb-1.5 block text-sm font-semibold">
-          Course / subject <span className="font-normal text-[var(--muted)]">(optional)</span>
-        </span>
-        <input
-          value={subject}
-          onChange={(e) => onSubjectChange(e.target.value)}
-          placeholder="e.g. Physics (JEE Main), Data Structures, UPSC GS2…"
-          className="field w-full px-3 py-2.5 text-sm"
-        />
-      </label>
-
-      <div className="mt-4">
-        <FileDropzone
-          onExtracted={onFileText}
-          onError={onFileError}
-          disabled={busy}
-        />
-      </div>
-
-      <label className="mt-3 block">
-        <span className="mb-1.5 flex items-center justify-between text-sm font-semibold">
-          Syllabus text
-          <span
-            className="font-mono text-xs font-normal"
-            style={{ color: tooLong ? "var(--bad)" : "var(--muted)" }}
-          >
-            {syllabus.length}/{MAX_CHARS}
-          </span>
-        </span>
-        <textarea
-          value={syllabus}
-          onChange={(e) => onSyllabusChange(e.target.value)}
-          rows={9}
-          placeholder={`Unit-I: Relations and Functions\n1. Types of relations, equivalence relations, one-one and onto functions…\n\nUnit-II: Algebra\n2. Matrices, determinants…`}
-          className="field w-full resize-y px-3 py-2.5 text-sm leading-relaxed"
-        />
-      </label>
 
       {error && (
         <p
@@ -169,7 +216,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
           ) : (
             <>
               <SearchIcon width={17} height={17} />
-              Analyse syllabus &amp; find best videos
+              Syllabus analyse karo →
             </>
           )}
         </button>
@@ -186,7 +233,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
         )}
 
         <span className="text-xs text-[var(--muted)]">
-          AI extracts topics → YouTube search → content match → ranked videos
+          AI topics nikalta hai → phir PYQ importance → uske baad videos
         </span>
       </div>
     </section>

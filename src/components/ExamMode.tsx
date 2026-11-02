@@ -5,16 +5,20 @@ import {
   BAND_LABEL,
   TREND_LABEL,
 } from "@/lib/exam";
+import { renderMarkdown } from "@/lib/markdown";
 import type {
   ExamPlanResponse,
   ExamTopic,
   PyqPaper,
   PyqQuestion,
+  SolvedPaper,
+  SolutionsResponse,
   Topic,
 } from "@/lib/types";
 import { AlertIcon, CalendarIcon, RefreshIcon, UploadIcon } from "./Icons";
 import { DocPanel } from "./DocPanel";
 import { QuizBox } from "./QuizBox";
+import { Tex } from "./Tex";
 
 interface ExamModeProps {
   topics: Topic[];
@@ -277,11 +281,12 @@ export function ExamMode({
     >
       <header className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--line)" }}>
         <div>
-          <h2 className="text-[1.05rem] font-extrabold">🎯 Exam Mode</h2>
+          <h2 className="text-[1.05rem] font-extrabold">🎯 Step 2 · PYQ analysis</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-            Apne <strong className="text-[var(--text)]">purane papers (2-3 saal)</strong> daalo —
-            app nikalega ki kaunsa topic har saal aata hai, kaunsa nahi. Phir usi trend ke hisaab
-            se kam time me sabse zyada marks dene wale topics pehle.
+            Apne <strong className="text-[var(--text)]">purane question papers</strong> daalo —
+            app saare sawaal nikaal kar unke neeche jawab dega, har topic ko{" "}
+            <strong className="text-[var(--text)]">Must / Might / Can skip</strong> tag dega, aur
+            usi trend ke hisaab se aage videos usi order mein dikhenge.
           </p>
         </div>
         {plan?.papers && plan.papers.length > 0 && (
@@ -498,8 +503,12 @@ export function ExamMode({
             </ul>
           )}
 
-          {/* Answer key + a paper with the same shape as the real thing */}
-          <PaperOutputs questions={questions} plan={plan} />
+          {/* Solved paper — questions with answers + tags, and the same-pattern mock */}
+          <PaperSolutions
+            questions={questions}
+            plan={plan}
+            subject={plan.subject ?? subject}
+          />
 
           <QuizBox
             topics={plan.topics}
@@ -514,35 +523,41 @@ export function ExamMode({
 /* -------------------------------------------------------------------------- */
 
 /**
- * The two documents a student needs AFTER reading the plan: the answer key for
- * the papers they already sat, and a fresh paper with the same shape.
- *
- * Solutions are generated per paper so each paper's key stays in its own
- * printed order — mixing two years into one list makes it unusable against a
- * real sheet.
+ * The solved paper: every extracted question with its model answer directly
+ * underneath, tagged easy/medium/hard and important — one document instead of
+ * a question sheet in one place and an answer key in another. Plus the
+ * same-pattern mock test built from the same papers.
  */
-function PaperOutputs({
+function PaperSolutions({
   questions,
+  subject,
   plan,
 }: {
   questions: PyqQuestion[];
+  subject: string;
   plan: ExamPlanResponse;
 }) {
   const realQuestions = questions.filter((q) => !q.isVariant);
+  const [solved, setSolved] = useState<SolvedPaper[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showAnswers, setShowAnswers] = useState(true);
   const [mockNote, setMockNote] = useState<string | null>(null);
   if (realQuestions.length === 0) return null;
 
   const papers = groupByPaper(realQuestions);
-  const subject = plan.subject ?? "";
 
-  const getSolutions = async (paper: PaperGroup): Promise<string> => {
-    const response = await fetch("/api/solutions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subject,
-        papers: [
-          {
+  const generate = async () => {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/solutions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject,
+          papers: papers.map((paper) => ({
             label: paper.label,
             year: paper.year,
             questions: paper.questions.map((q) => ({
@@ -550,13 +565,19 @@ function PaperOutputs({
               marks: q.marks,
               number: q.number,
             })),
-          },
-        ],
-      }),
-    });
-    const data: { ok: boolean; markdown?: string; error?: string } = await response.json();
-    if (!data.ok || !data.markdown) throw new Error(data.error || "Solutions nahi ban paaye.");
-    return data.markdown;
+          })),
+        }),
+      });
+      const data: SolutionsResponse = await response.json();
+      if (!data.ok || !data.papers?.length) {
+        throw new Error(data.error || "Solutions nahi ban paaye.");
+      }
+      setSolved(data.papers);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Solutions banate waqt dikkat aa gayi.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getMockTest = async (): Promise<string> => {
@@ -589,25 +610,132 @@ function PaperOutputs({
 
   return (
     <div className="mt-5 space-y-3 border-t pt-4" style={{ borderColor: "var(--line)" }}>
-      <div>
-        <h3 className="text-sm font-extrabold">📜 Solutions & mock test</h3>
-        <p className="mt-0.5 text-[0.72rem] leading-relaxed text-[var(--muted)]">
-          Pehle apne purane papers ka poora answer key lo, phir usi pattern ka naya paper —
-          structure copy kiya hua, sawaal naye.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-extrabold">📖 Solved paper — har sawaal ka jawab uske neeche</h3>
+          <p className="mt-0.5 text-[0.72rem] leading-relaxed text-[var(--muted)]">
+            Pehle apne purane papers ke saare sawaal, unke neeche model answer aur har sawaal par
+            Easy/Medium/Hard + Important tag. Padh ke hi pata chal jayega kya aata hai.
+          </p>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void generate()}
+            disabled={loading}
+            className="btn-primary flex items-center gap-1.5 px-3.5 py-2 text-xs disabled:opacity-60"
+          >
+            {loading ? (
+              <>
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                {solved ? "Dobara likh raha hai…" : "Jawab likhe ja rahe hain…"}
+              </>
+            ) : solved ? (
+              <>
+                <RefreshIcon width={13} height={13} /> Dobara banao
+              </>
+            ) : (
+              "✍️ Solutions + tags banao"
+            )}
+          </button>
+
+          {solved && (
+            <button
+              type="button"
+              onClick={() => setShowAnswers((s) => !s)}
+              className="btn-ghost px-3 py-2 text-xs"
+            >
+              {showAnswers ? "Jawab band karo" : "Jawab dikhao"}
+            </button>
+          )}
+        </div>
       </div>
 
-      {papers.map((paper) => (
-        <DocPanel
-          key={paper.key}
-          title={`${paper.label} ${paper.year} — ${paper.questions.length} sawaal ke solutions`}
-          subtitle="Uttane hi order me jaise paper me the, working + marks breakdown ke saath."
-          buttonLabel="Solutions banao"
-          filename={`${paper.year}-${paper.label}-solutions`.replace(/[^\w-]+/g, "-").toLowerCase()}
-          onGenerate={() => getSolutions(paper)}
-        />
-      ))}
+      {loading && (
+        <div className="space-y-2">
+          <div className="skeleton h-3.5 w-2/5 rounded" />
+          <div className="skeleton h-3 w-full rounded" />
+          <div className="skeleton h-3 w-11/12 rounded" />
+          <div className="skeleton h-3 w-3/4 rounded" />
+          <p className="pt-1 text-xs text-[var(--muted)]">
+            Har sawaal ka poora solution likh raha hoon — thoda time lagega…
+          </p>
+        </div>
+      )}
 
+      {error && (
+        <p className="flex items-start gap-1.5 text-xs" style={{ color: "var(--bad)" }}>
+          <span className="mt-0.5 shrink-0">
+            <AlertIcon width={13} height={13} />
+          </span>
+          {error}
+        </p>
+      )}
+
+      {solved &&
+        solved.map((paper) => {
+          const source = papers.find(
+            (p) => p.label === paper.label && p.year === paper.year,
+          );
+          return (
+            <section key={`${paper.label}-${paper.year}`}>
+              <p
+                className="mb-2 inline-flex rounded-lg px-2.5 py-1 text-xs font-extrabold"
+                style={{
+                  background: "color-mix(in srgb, var(--brand) 10%, transparent)",
+                  color: "var(--brand)",
+                }}
+              >
+                📄 {paper.label} {paper.year} · {paper.entries.length} sawaal
+              </p>
+
+              <ol className="space-y-2.5">
+                {paper.entries.map((entry) => {
+                  const question = source?.questions[entry.index - 1];
+                  return (
+                    <li
+                      key={entry.index}
+                      className="rounded-xl border px-3 py-2.5"
+                      style={{ borderColor: "var(--line)", background: "var(--surface-2)" }}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {question?.number && <span className="chip">{question.number}</span>}
+                        {question?.marks && <span className="chip">{question.marks} marks</span>}
+                        <DifficultyTag difficulty={entry.difficulty} />
+                        {entry.important && (
+                          <span
+                            className="chip font-bold"
+                            style={{
+                              color: "var(--bad)",
+                              borderColor: "color-mix(in srgb, var(--bad) 45%, var(--line))",
+                            }}
+                          >
+                            ⭐ Important
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-1.5 text-[0.87rem] font-semibold leading-relaxed">
+                        <Tex text={question?.text ?? ""} />
+                      </p>
+
+                      {showAnswers && (
+                        <div
+                          className="plan-markdown mt-2 rounded-lg px-3 py-2 text-[0.84rem]"
+                          style={{ background: "var(--surface)" }}
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.answer) }}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          );
+        })}
+
+      {/* Answer key + a paper with the same shape as the real thing */}
       <DocPanel
         title="🧪 Mock test — in papers jaisa exact pattern"
         subtitle="Sections, sawaalon ki sankhya aur marks-per-question sab tumhare asli papers jaisa. Sawaal naye, topic wahi jo repeat hote hain."
@@ -624,6 +752,27 @@ function PaperOutputs({
         onGenerate={getMockTest}
       />
     </div>
+  );
+}
+
+const DIFFICULTY_STYLE: Record<
+  "easy" | "medium" | "hard",
+  { label: string; color: string }
+> = {
+  easy: { label: "Easy", color: "var(--good)" },
+  medium: { label: "Medium", color: "var(--warn)" },
+  hard: { label: "Hard", color: "var(--bad)" },
+};
+
+function DifficultyTag({ difficulty }: { difficulty: "easy" | "medium" | "hard" }) {
+  const style = DIFFICULTY_STYLE[difficulty] ?? DIFFICULTY_STYLE.medium;
+  return (
+    <span
+      className="chip font-bold"
+      style={{ color: style.color, borderColor: `color-mix(in srgb, ${style.color} 45%, var(--line))` }}
+    >
+      {style.label}
+    </span>
   );
 }
 

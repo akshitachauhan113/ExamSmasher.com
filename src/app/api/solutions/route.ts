@@ -1,17 +1,12 @@
 import { generateText, getLlmConfig } from "@/lib/llm";
 import { mapWithConcurrency } from "@/lib/videos";
 import { buildSolutionsPrompt } from "@/lib/prompts";
+import type { QuestionDifficulty, SolutionEntry, SolutionsResponse } from "@/lib/types";
 
 const MAX_PAPERS = 6;
 const MAX_QUESTIONS_PER_PAPER = 40;
-/** Long answers do not fit 25 at a time without cutting off mid-paper. */
+/** Long answers do not fit 8 at a time without cutting off mid-paper. */
 const BATCH_SIZE = 8;
-
-interface SolutionsResponse {
-  ok: boolean;
-  markdown?: string;
-  error?: string;
-}
 
 interface PaperBody {
   label?: unknown;
@@ -19,9 +14,16 @@ interface PaperBody {
   questions?: Array<{ text?: unknown; marks?: unknown; number?: unknown }>;
 }
 
+const DIFFICULTIES = new Set<QuestionDifficulty>(["easy", "medium", "hard"]);
+
 /**
- * The complete answer key for every uploaded paper, in the order each paper
- * printed its questions.
+ * The solved form of every uploaded paper: each question with its model
+ * answer directly attached, plus easy/medium/hard and important tags — so the
+ * page can show a solved paper instead of a separate answer key.
+ *
+ * The model answers in a plain-text block format (NOT JSON) because the
+ * answers are full of LaTeX, and Gemini's JSON mode mangles LaTeX backslashes
+ * into invalid JSON. Blocks are parsed here.
  *
  * Papers run in parallel, questions inside a paper run in batches of 8 — enough
  * concurrency to be quick, small enough that an answer is never truncated
@@ -85,34 +87,43 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     // Papers first, batches inside each — order of questions within a paper is
-    // preserved so the key lines up with the sheet the student is holding.
-    const perPaper = await mapWithConcurrency(papers, 2, async (paper) => {
-      const batches: Array<{ text: string; marks?: number; number?: string }[]> = [];
-      for (let i = 0; i < paper.questions.length; i += BATCH_SIZE) {
-        batches.push(paper.questions.slice(i, i + BATCH_SIZE));
+    // preserved so the solved paper lines up with the sheet the student holds.
+    const solved = await mapWithConcurrency(papers, 2, async (paper) => {
+      const entries: SolutionEntry[] = [];
+
+      for (let offset = 0; offset < paper.questions.length; offset += BATCH_SIZE) {
+        const batch = paper.questions.slice(offset, offset + BATCH_SIZE);
+        const text = await solveBatch(subject, {
+          label: paper.label,
+          year: paper.year,
+          questions: batch,
+        });
+
+        for (const block of parseAnswerBlocks(text)) {
+          // The model numbers blocks 1..batch.length — translate to the
+          // paper-wide position the client sent us.
+          if (block.index < 1 || block.index > batch.length || !block.answer) continue;
+          entries.push({
+            index: offset + block.index,
+            answer: block.answer.slice(0, 6000),
+            difficulty: DIFFICULTIES.has(block.difficulty) ? block.difficulty : "medium",
+            important: block.important,
+          });
+        }
       }
 
-      const parts = await mapWithConcurrency(batches, 2, (questions) =>
-        writeSolutions(subject, { label: paper.label, year: paper.year, questions }),
-      );
-
-      const heading = `## 📝 ${paper.label} ${paper.year} — solutions (${paper.questions.length} questions)`;
-      return [heading, ...parts].join("\n\n");
+      return { label: paper.label, year: paper.year, entries };
     });
 
-    const markdown = perPaper
-      .join("\n\n---\n\n")
-      .replace(/\n{4,}/g, "\n\n\n")
-      .trim();
-
-    if (!markdown) {
+    const usable = solved.filter((paper) => paper.entries.length > 0);
+    if (usable.length === 0) {
       return Response.json(
         { ok: false, error: "Solutions khali aa gaye — ek baar dobara try karo." },
         { status: 502 },
       );
     }
 
-    const response: SolutionsResponse = { ok: true, markdown };
+    const response: SolutionsResponse = { ok: true, papers: usable };
     return Response.json(response);
   } catch (error) {
     return Response.json(
@@ -125,7 +136,8 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-async function writeSolutions(
+/** One batch of ONE paper's questions -> the model's raw block-format reply. */
+async function solveBatch(
   subject: string,
   paper: {
     label: string;
@@ -134,11 +146,53 @@ async function writeSolutions(
   },
 ): Promise<string> {
   const { system, prompt } = buildSolutionsPrompt({ subject, paper });
-  const out = await generateText(prompt, {
+  return generateText(prompt, {
     system,
     temperature: 0.2,
     maxOutputTokens: 8192,
     timeoutMs: 120_000,
   });
-  return out.trim();
+}
+
+interface AnswerBlock {
+  index: number;
+  answer: string;
+  difficulty: QuestionDifficulty;
+  important: boolean;
+}
+
+/**
+ * Splits the reply on "###ANSWER n | difficulty=x | important=y" header lines.
+ * The body keeps every character verbatim — LaTeX included — so nothing is
+ * lost to escaping on the way back to the page.
+ */
+function parseAnswerBlocks(text: string): AnswerBlock[] {
+  const blocks: AnswerBlock[] = [];
+  // Match a header line, capture the three fields, then everything until the
+  // next header (or end of reply).
+  const header = /^###ANSWER\s+(\d+)\s*\|?\s*difficulty\s*=\s*(\w+)\s*\|?\s*important\s*=\s*(\w+)/gim;
+  const matches = [...text.matchAll(header)];
+  if (matches.length === 0) return blocks;
+
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const index = Number(match[1]);
+    const difficultyRaw = (match[2] ?? "").toLowerCase();
+    const importantRaw = (match[3] ?? "").toLowerCase();
+
+    const bodyStart = match.index! + match[0].length;
+    const bodyEnd = i + 1 < matches.length ? matches[i + 1].index! : text.length;
+    const answer = text.slice(bodyStart, bodyEnd).trim();
+
+    blocks.push({
+      index,
+      answer,
+      difficulty: (DIFFICULTIES.has(difficultyRaw as QuestionDifficulty)
+        ? difficultyRaw
+        : "medium") as QuestionDifficulty,
+      important: importantRaw === "yes" || importantRaw === "true",
+    });
+  }
+
+  return blocks;
 }

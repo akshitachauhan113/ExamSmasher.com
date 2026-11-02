@@ -1,4 +1,20 @@
-import type { Topic, VideoCandidate } from "./types";
+import type { NotesLang, Topic, VideoCandidate } from "./types";
+
+/**
+ * Shared rule for everything the AI writes that a student will READ: every
+ * equation goes in LaTeX so the UI can typeset it notebook-style with KaTeX
+ * instead of leaking raw `\frac{a}{b}` code into the page.
+ */
+const MATH_RULE = `EQUATIONS: write every formula, equation and expression in LaTeX — $...$ inside a line, $$...$$ on its own line for long derivations. Use real commands: \\frac{a}{b}, x^2, \\sqrt{x}, \\int_0^1 f(x)\\,dx, \\sum, \\theta. Never write bare pseudo-maths like a/b or (a^2+b^2) without the $ signs — the page typesets LaTeX.`;
+
+/**
+ * Study material comes in two flavours — the student picks before generating.
+ * Hinglish means the *explanations* go Desi; the syllabus terms stay put.
+ */
+const LANGUAGE_RULE = (language?: NotesLang): string =>
+  language === "hinglish"
+    ? `LANGUAGE: easy HINGLISH — write explanations, headings, bullets and answers the way a friend would explain ("is concept me do parts hote hain, pehla wala..."). Keep every technical term, definition, law name and formula in standard English exactly as the syllabus uses them — only the sentence around it is Hinglish.`
+    : `LANGUAGE: simple, clear English for everything — explanations, headings, bullets and answers. Technical terms stay exactly as the syllabus writes them.`;
 
 export interface AnalyzeInput {
   syllabus: string;
@@ -171,7 +187,7 @@ Return EXACTLY this JSON shape:
   return { system, prompt };
 }
 
-/* ------------------------------ notes + cards ------------------------------ */
+/* ------------------------------ topic notes ------------------------------ */
 
 export interface NotesInput {
   topic: {
@@ -185,8 +201,14 @@ export interface NotesInput {
   subject?: string;
   /** Optional syllabus excerpt so the notes stay inside the course scope. */
   syllabus?: string;
+  /** English or Hinglish — whatever the student picked on the notes panel. */
+  language?: NotesLang;
 }
 
+/**
+ * THREE levels of notes per topic — concept clarity, fast revision and active
+ * recall — generated in one call so the student never waits three times.
+ */
 export function buildNotesPrompt(input: NotesInput): { system: string; prompt: string } {
   const system = `You are a senior teacher writing exam-ready study material in three levels of depth.
 You ALWAYS reply with one valid JSON object and nothing else - no markdown, no commentary.`;
@@ -205,6 +227,8 @@ ${
     : ""
 }
 
+${LANGUAGE_RULE(input.language)}
+
 THE THREE LEVELS:
 1. "detailed" = 3 to 5 sections. Each has a short "heading" and 2 to 3 "paragraphs".
    Paragraphs are 45-80 words of real teaching: what the idea means, why it matters, how it
@@ -218,6 +242,7 @@ THE THREE LEVELS:
    difference-between, "why"), "a" is the answer in max 25 words.
 
 Keep technical terms and formulas exactly as the syllabus uses them.
+${MATH_RULE}
 
 Return EXACTLY this JSON shape:
 {
@@ -246,6 +271,8 @@ export interface FullNotesInput {
   totalSections: number;
   /** Unit/chapter label if we could detect one for this slice. */
   sectionLabel?: string;
+  /** English or Hinglish — same choice as the per-topic notes. */
+  language?: NotesLang;
 }
 
 /**
@@ -281,8 +308,10 @@ ${input.section.slice(0, 11000)}
 
 WHAT TO PRODUCE:
 - A level-2 heading, then every syllabus point taught in depth.
+${LANGUAGE_RULE(input.language)}
 - For each concept: what it means, WHY it exists, how it works step by step,
   then the formula/algorithm/procedure worked through concretely.
+- ${MATH_RULE}
 - Use level-3 headings to split concepts. Bullets for anything list-shaped
   (steps, types, comparisons, properties).
 - Include a short worked example wherever a calculation or derivation is involved.
@@ -559,7 +588,8 @@ FORMAT:
 diagram descriptions, formulae). For numericals, show the working.
 **Key points** — bullet list of what earns marks.
 **Common mistake** — one line on how students usually lose marks here.
-**How to revise this** — one line pointing at what to memorise.`;
+**How to revise this** — one line pointing at what to memorise.
+${MATH_RULE}`;
 
   return { system, prompt };
 }
@@ -573,7 +603,15 @@ export interface SolutionsInput {
 }
 
 /**
- * Writes worked solutions for a batch of ONE paper's questions.
+ * Writes worked solutions for a batch of ONE paper's questions — as STRUCTURED
+ * data rather than one long blob, so the page can put each answer directly
+ * under its own question (a solved paper, not a separate answer key) and tag
+ * every question easy/medium/hard + important.
+ *
+ * Deliberately NOT JSON: answers are full of LaTeX backslashes ($\mathcal{O}$,
+ * \frac) and Gemini's JSON mode mangles those escapes, silently producing
+ * invalid JSON. A plain-text block format passes LaTeX through untouched and
+ * cannot fail to parse.
  *
  * Batched rather than one-at-a-time so a 25-question paper is not 25 round
  * trips — but still per paper, so the answer key stays in the order the student
@@ -589,9 +627,9 @@ export function buildSolutionsPrompt(input: SolutionsInput): {
 
   const system = `You are the examiner who set this paper and now write the official answer key.
 You show working, not just results, and you are honest about where marks are actually awarded.
-Reply in clean Markdown ONLY — no preamble, no code fences around the whole answer.`;
+Reply as plain text in the exact block format requested — no code fences, no JSON, no preamble.`;
 
-  const prompt = `Write the complete solution key for this paper.
+  const prompt = `Solve every question of this paper and tag how hard and how important it is.
 
 SUBJECT: ${input.subject}
 PAPER: ${input.paper.label} ${input.paper.year}
@@ -599,19 +637,32 @@ PAPER: ${input.paper.label} ${input.paper.year}
 QUESTIONS:
 ${lines}
 
+OUTPUT FORMAT — one block per question, in this EXACT shape, blocks back to back:
+
+###ANSWER 1 | difficulty=easy | important=yes
+The answer here. It may span many lines and use LaTeX like $x^2$ or $$\\frac{a}{b}$$. It ends where the next ###ANSWER line begins.
+
+###ANSWER 2 | difficulty=hard | important=no
+The answer here...
+
 RULES:
-1. Answer EVERY question in the list, in the same order, numbered to match.
-2. Structure each answer the way an examiner expects: steps, labelled points,
-   formulae substituted with values, diagram descriptions where asked.
-3. For numericals and derivations, SHOW the working — a student must be able to
-   copy the method.
-4. After each answer add one line: **Marks** — a compact breakdown of where the
-   marks go (e.g. "setup 2 · working 3 · result 1"). Only if marks were given.
-5. For objective/short questions, be brief — do not pad a 1-mark answer.
-6. Keep answers technically correct for a university level. If a question is
-   genuinely ambiguous, say so in one line rather than inventing certainty.
-7. Finish with "### Common mistakes in this paper" — 3 to 5 bullets on where
-   students typically lose marks in THESE questions.`;
+1. Emit exactly one block per question above, numbered to match (###ANSWER 1, ###ANSWER 2, ...).
+2. In the header line, difficulty is one of easy|medium|hard and important is yes|no.
+3. Structure each answer the way an examiner expects: labelled points/steps, formulae
+   substituted with values, diagram descriptions where asked. For numericals and
+   derivations SHOW the working — a student must be able to copy the method.
+4. End each answer with a line starting "**Marks**" — where the marks go (e.g. "**Marks** —
+   setup 2 · working 3 · result 1"). Only when the question carried marks.
+5. "difficulty": easy = direct recall / 1-2 mark objective; medium = 2-6 mark explanation or
+   calculation; hard = long derivation, proof or a tricky numerical.
+6. "important": yes when this question's topic or pattern keeps showing up in this subject's
+   university exams — the kind of question a student must not skip.
+7. For objective/short questions be brief — do not pad a 1-mark answer.
+8. Keep answers technically correct for a university level. If a question is genuinely
+   ambiguous, say so in one line rather than inventing certainty.
+9. ${MATH_RULE}
+
+Start your reply with the very first "###ANSWER 1" line — nothing before it.`;
 
   return { system, prompt };
 }
@@ -681,6 +732,7 @@ HOW TO BUILD IT:
 4. Every question must be answerable from the syllabus given below — no invented
    out-of-scope content.
 5. NEW wording — do not copy any past question verbatim. Same concepts, fresh phrasing.
+6. ${MATH_RULE}
 
 OUTER SYLLABUS (do not go outside this):
 """

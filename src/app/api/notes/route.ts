@@ -81,6 +81,7 @@ export async function POST(request: Request): Promise<Response> {
     topic?: Partial<Topic>;
     subject?: unknown;
     syllabus?: unknown;
+    language?: unknown;
   } | null;
 
   const title = typeof body?.topic?.title === "string" ? body.topic.title.trim() : "";
@@ -119,6 +120,7 @@ export async function POST(request: Request): Promise<Response> {
     topic,
     subject: typeof body?.subject === "string" ? body.subject.slice(0, 80) : undefined,
     syllabus: typeof body?.syllabus === "string" ? body.syllabus : undefined,
+    language: body?.language === "hinglish" ? "hinglish" : "english",
   });
 
   try {
