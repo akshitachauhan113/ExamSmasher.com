@@ -22,11 +22,17 @@ export const metadata: Metadata = {
 /** Applies the saved theme before paint to avoid a flash of the wrong colours. */
 const themeScript = `(function(){try{var t=localStorage.getItem("es-theme");if(!t){t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}document.documentElement.dataset.theme=t;}catch(e){document.documentElement.dataset.theme="light";}})();`;
 
+/**
+ * `data-theme` on <html> is deliberately rewritten by `themeScript` below
+ * before React hydrates, so React must not treat the saved theme as a
+ * hydration error — hence `suppressHydrationWarning` on the root element.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
       data-theme="light"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
