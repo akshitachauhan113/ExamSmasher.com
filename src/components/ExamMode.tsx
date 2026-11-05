@@ -26,20 +26,19 @@ import type {
 } from "@/lib/types";
 import { AlertIcon, CalendarIcon, RefreshIcon, UploadIcon } from "./Icons";
 import { DocPanel } from "./DocPanel";
-import { QuizBox } from "./QuizBox";
 import { Tex } from "./Tex";
 
 interface ExamModeProps {
   topics: Topic[];
   subject: string;
-  /** Raw syllabus text so answer frameworks can quote the student's own points. */
-  syllabus: string;
   /** Exam state lives in the page so re-analysing does not wipe uploaded papers. */
   exam: ExamState;
   setExam: (patch: Partial<ExamState>) => void;
   /** Called after a plan is built, so the page can toast + reorder topics. */
   onPlanBuilt: (plan: ExamPlanResponse) => void;
   onJumpToTopic: (topicId: string) => void;
+  /** Opens My Study Space, where the solved paper / mock / quiz now live. */
+  onOpenSpace?: () => void;
 }
 
 /** Everything Exam Mode produces. Owned by the page, edited by this panel. */
@@ -96,11 +95,11 @@ const BAND_ORDER: ExamTopic["band"][] = ["must", "should", "if-time"];
 export function ExamMode({
   topics,
   subject,
-  syllabus,
   exam,
   setExam,
   onPlanBuilt,
   onJumpToTopic,
+  onOpenSpace,
 }: ExamModeProps) {
   // Page-owned state: survives a re-analysis of the syllabus, so the student
   // never has to re-OCR their papers just because they edited the syllabus.
@@ -502,18 +501,24 @@ export function ExamMode({
             </ul>
           )}
 
-          {/* Solved paper — questions with answers + tags, and the same-pattern mock */}
-          <PaperSolutions
-            questions={questions}
-            plan={plan}
-            subject={plan.subject ?? subject}
-            syllabus={syllabus}
-          />
-
-          <QuizBox
-            topics={plan.topics}
-            subject={plan.subject ?? subject}
-          />
+          {/* Solved paper, mock test and quiz moved to My Study Space —
+              same components, one home for the "practice" features. */}
+          <div
+            className="mt-5 rounded-xl border border-dashed px-4 py-3 text-xs leading-relaxed"
+            style={{ borderColor: "var(--line)" }}
+          >
+            ✍️ Solved paper, mock test aur quiz ab <strong>My Study Space</strong> me hain — wahin
+            par notes aur progress bhi.
+            {onOpenSpace && (
+              <button
+                type="button"
+                onClick={onOpenSpace}
+                className="btn-ghost ml-2 inline-flex px-3 py-1.5 text-xs"
+              >
+                My Study Space kholo →
+              </button>
+            )}
+          </div>
         </div>
       )}
     </section>
@@ -525,10 +530,11 @@ export function ExamMode({
 /**
  * The solved paper: every extracted question with its answer directly
  * underneath, tagged easy/medium/hard and important — one document instead of
- * a question sheet in one place and an answer key in another. Plus the
- * same-pattern mock test built from the same papers.
+ * a question sheet in one place and an answer key in another.
+ *
+ * Lives in My Study Space alongside the mock test and quiz.
  */
-function PaperSolutions({
+export function PaperSolutions({
   questions,
   subject,
   plan,
@@ -543,12 +549,9 @@ function PaperSolutions({
   const [solved, setSolved] = useState<SolvedPaper[] | null>(null);
   /** Which engine produced the answer text currently on screen. */
   const [solvedSource, setSolvedSource] = useState<EngineSource | null>(null);
-  /** Which engine produced the mock paper. */
-  const [mockSource, setMockSource] = useState<EngineSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAnswers, setShowAnswers] = useState(true);
-  const [mockNote, setMockNote] = useState<string | null>(null);
   if (realQuestions.length === 0) return null;
 
   const papers = groupByPaper(realQuestions);
@@ -599,41 +602,6 @@ function PaperSolutions({
     } finally {
       setLoading(false);
     }
-  };
-
-  const getMockTest = async (): Promise<string> => {
-    const data: MockTestResponse = await buildMockTest({
-      subject,
-      questions: realQuestions,
-      topics: (plan.topics ?? []).map((entry) => ({
-        id: entry.topic.id,
-        title: entry.topic.title,
-        chapter: entry.topic.chapter,
-        keywords: entry.topic.keywords,
-        description: entry.topic.description,
-        importance: entry.topic.importance,
-        difficulty: entry.topic.difficulty,
-        pastQuestions: entry.signal.questions.slice(0, 4).map((q) => ({
-          text: q.text,
-          year: q.paperYear,
-          label: q.paperLabel,
-          marks: q.marks,
-        })),
-      })),
-    });
-    if (!data.ok || !data.markdown) throw new Error(data.error || "Mock test nahi ban paaya.");
-
-    setMockSource(data.source ?? "rules");
-    // Echo what was actually measured in their papers, so "same pattern" is
-    // a checkable claim rather than a promise.
-    if (data.structure) {
-      setMockNote(
-        `Tumhare papers se nikaala gaya pattern: ${data.structure.sections} sections · ${data.structure.totalMarks} marks · ${data.structure.years}`,
-      );
-    } else {
-      setMockNote(null);
-    }
-    return data.markdown;
   };
 
   return (
@@ -778,40 +746,97 @@ function PaperSolutions({
             : "📄 Jawab rule engine ne banaye — ye framework hai, verified model answer nahi."}
         </p>
       )}
-
-      {/* Answer key + a paper with the same shape as the real thing */}
-      <DocPanel
-        title="🧪 Mock test — in papers jaisa exact pattern"
-        subtitle="Sections, sawaalon ki sankhya aur marks-per-question sab tumhare asli papers jaisa. Sawaal naye, topic wahi jo repeat hote hain."
-        buttonLabel="Mock test banao"
-        filename="mock-test"
-        note={
-          mockNote ??
-          (plan.topics && plan.topics.length > 0
-            ? `Topics: ${plan.topics.filter((t) => t.signal.trend === "repeating").length} repeating + ${
-                plan.topics.filter((t) => t.signal.trend === "important").length
-              } important se sawaal honge.`
-            : null)
-        }
-        extra={
-          mockSource ? (
-            <p
-              className="text-[0.68rem] text-[var(--muted)]"
-              title={
-                mockSource === "ai"
-                  ? "Questions written by the model running locally in this browser"
-                  : "Questions assembled from your own syllabus lines and real past questions"
-              }
-            >
-              {mockSource === "ai"
-                ? "🧠 Sawaal browser AI model ne likhe — ye asli past-paper sawaal nahi hain."
-                : "📄 Sawaal rule engine ne banaye — aapke syllabus aur PYQs se, asli past paper nahi."}
-            </p>
-          ) : null
-        }
-        onGenerate={getMockTest}
-      />
     </div>
+  );
+}
+
+/**
+ * The same-pattern mock test, split out of the solved paper so My Study
+ * Space can host it as its own feature. Structure is measured from the
+ * student's real papers either way.
+ */
+export function MockTestPanel({
+  questions,
+  plan,
+  subject,
+}: {
+  questions: PyqQuestion[];
+  plan: ExamPlanResponse;
+  subject: string;
+}) {
+  const realQuestions = questions.filter((q) => !q.isVariant);
+  /** Which engine produced the mock paper. */
+  const [mockSource, setMockSource] = useState<EngineSource | null>(null);
+  const [mockNote, setMockNote] = useState<string | null>(null);
+  if (realQuestions.length === 0) return null;
+
+  const getMockTest = async (): Promise<string> => {
+    const data: MockTestResponse = await buildMockTest({
+      subject,
+      questions: realQuestions,
+      topics: (plan.topics ?? []).map((entry) => ({
+        id: entry.topic.id,
+        title: entry.topic.title,
+        chapter: entry.topic.chapter,
+        keywords: entry.topic.keywords,
+        description: entry.topic.description,
+        importance: entry.topic.importance,
+        difficulty: entry.topic.difficulty,
+        pastQuestions: entry.signal.questions.slice(0, 4).map((q) => ({
+          text: q.text,
+          year: q.paperYear,
+          label: q.paperLabel,
+          marks: q.marks,
+        })),
+      })),
+    });
+    if (!data.ok || !data.markdown) throw new Error(data.error || "Mock test nahi ban paaya.");
+
+    setMockSource(data.source ?? "rules");
+    // Echo what was actually measured in their papers, so "same pattern" is
+    // a checkable claim rather than a promise.
+    if (data.structure) {
+      setMockNote(
+        `Tumhare papers se nikaala gaya pattern: ${data.structure.sections} sections · ${data.structure.totalMarks} marks · ${data.structure.years}`,
+      );
+    } else {
+      setMockNote(null);
+    }
+    return data.markdown;
+  };
+
+  return (
+    <DocPanel
+      title="🧪 Mock test — in papers jaisa exact pattern"
+      subtitle="Sections, sawaalon ki sankhya aur marks-per-question sab tumhare asli papers jaisa. Sawaal naye, topic wahi jo repeat hote hain."
+      buttonLabel="Mock test banao"
+      filename="mock-test"
+      note={
+        mockNote ??
+        (plan.topics && plan.topics.length > 0
+          ? `Topics: ${plan.topics.filter((t) => t.signal.trend === "repeating").length} repeating + ${
+              plan.topics.filter((t) => t.signal.trend === "important").length
+            } important se sawaal honge.`
+          : null)
+      }
+      extra={
+        mockSource ? (
+          <p
+            className="text-[0.68rem] text-[var(--muted)]"
+            title={
+              mockSource === "ai"
+                ? "Questions written by the model running locally in this browser"
+                : "Questions assembled from your own syllabus lines and real past questions"
+            }
+          >
+            {mockSource === "ai"
+              ? "🧠 Sawaal browser AI model ne likhe — ye asli past-paper sawaal nahi hain."
+              : "📄 Sawaal rule engine ne banaye — aapke syllabus aur PYQs se, asli past paper nahi."}
+          </p>
+        ) : null
+      }
+      onGenerate={getMockTest}
+    />
   );
 }
 

@@ -144,7 +144,7 @@ export function ChatWidget({ subject, topics, syllabus, pastQuestions = [] }: Ch
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label={open ? "Close study coach" : "Open study coach"}
-        className="fixed bottom-5 right-5 z-40 grid h-14 w-14 place-items-center rounded-full shadow-2xl transition-transform hover:scale-105"
+        className="fixed bottom-20 right-5 z-40 grid h-14 w-14 place-items-center rounded-full shadow-2xl transition-transform hover:scale-105 md:bottom-5"
         style={{ background: "var(--brand)", color: "var(--brand-contrast, #fff)" }}
       >
         {open ? <CloseIcon width={20} height={20} /> : <ChatIcon width={22} height={22} />}

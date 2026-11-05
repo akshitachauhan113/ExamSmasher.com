@@ -2,26 +2,28 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  CalendarIcon,
-  CheckIcon,
-  CopyIcon,
-  DownloadIcon,
-  GraduationIcon,
-  ListIcon,
-  RefreshIcon,
-} from "@/components/Icons";
+import { CheckIcon, GraduationIcon } from "@/components/Icons";
 import { AiStatusChip } from "@/components/AiStatusChip";
 import { ChatWidget } from "@/components/ChatWidget";
-import { CoverageReport } from "@/components/CoverageReport";
 import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
-import { FullNotesPanel } from "@/components/FullNotesPanel";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { TodoPanel } from "@/components/TodoPanel";
 import { TopicPanel } from "@/components/TopicPanel";
 import { TopicSidebar } from "@/components/TopicSidebar";
+import { BottomNav, SiteNav, type AppView } from "@/components/SiteNav";
+import {
+  HeroDashboard,
+  type DashboardAction,
+  type SpaceAnchor,
+} from "@/components/HeroDashboard";
+import { TabBar } from "@/components/TabBar";
+import { OverviewPanel } from "@/components/OverviewPanel";
+import { TopicAccordion, unitKeyOf } from "@/components/TopicAccordion";
+import { PlaylistBoard, type PlaylistTab } from "@/components/PlaylistBoard";
+import { SettingsPanel } from "@/components/SettingsPanel";
+import { StudySpacePanel } from "@/components/StudySpacePanel";
 import { useStudiedTopics } from "@/hooks/useStudiedTopics";
 import { primeBrowserAi } from "@/lib/ai/run";
 import { analyzeSyllabus, buildPlan, topicSearches } from "@/lib/engine";
@@ -38,6 +40,8 @@ import type {
 } from "@/lib/types";
 
 type Phase = "idle" | "analyzing" | "papers" | "matching" | "done";
+/** Which analysis tab the student is reading. */
+type AnalysisTab = "overview" | "all" | "important" | "pyq" | "playlists";
 
 interface PlanState {
   open: boolean;
@@ -79,6 +83,13 @@ export default function Home() {
   const [exam, setExamState] = useState<ExamState>(EMPTY_EXAM_STATE);
   /** True when the student deliberately skipped the PYQ step for now. */
   const [pyqSkipped, setPyqSkipped] = useState(false);
+
+  /* --------------------------- navigation views ------------------------- */
+  const [view, setView] = useState<AppView>("home");
+  const [analysisTab, setAnalysisTab] = useState<AnalysisTab>("overview");
+  const [playlistTab, setPlaylistTab] = useState<PlaylistTab>("complete");
+  /** Unit (chapter) sections the student has opened in the topic accordion. */
+  const [expandedUnits, setExpandedUnits] = useState<Set<string>>(new Set());
 
   /** Partial-update helper so ExamMode can patch one field without the rest. */
   const setExam = useCallback((patch: Partial<ExamState>) => {
@@ -128,6 +139,8 @@ export default function Home() {
   const allStudied = topics.length > 0 && studiedCount === topics.length;
   /** Only the syllabus analysis blocks the student — video search is Step 3. */
   const busy = phase === "analyzing";
+  /** Search links exist (being built, or finished). */
+  const linksReady = phase === "matching" || phase === "done";
 
   /**
    * Exam Mode rewrites the study order: once the plan exists, must-do topics
@@ -307,6 +320,10 @@ export default function Home() {
     setResults({});
     setTopics([]);
     setActiveId(null);
+    // Fresh analysis starts on the Overview tab with all units closed.
+    setView("home");
+    setAnalysisTab("overview");
+    setExpandedUnits(new Set());
     // Keep the uploaded PAPERS (re-OCR is expensive) but drop derived state —
     // new topics mean the plan and the topic mapping must be rebuilt.
     setExam({ questions: [], parsedPapers: [], plan: null });
@@ -441,11 +458,14 @@ export default function Home() {
   );
 
   /** Fills the syllabus box from an uploaded file. */
-  const handleFileText = useCallback((text: string, fileName: string) => {
-    setSyllabus(text);
-    setFormError(null);
-    notify(`File padh li gaya: ${fileName}`);
-  }, [notify]);
+  const handleFileText = useCallback(
+    (text: string, fileName: string) => {
+      setSyllabus(text);
+      setFormError(null);
+      notify(`File padh li gaya: ${fileName}`);
+    },
+    [notify],
+  );
 
   const handleFileError = useCallback((message: string) => setFormError(message), []);
 
@@ -461,7 +481,99 @@ export default function Home() {
     setPhase("idle");
     setFormError(null);
     setActiveId(null);
+    setView("home");
+    setAnalysisTab("overview");
+    setExpandedUnits(new Set());
   }, []);
+
+  /* --------------------------- navigation ------------------------------ */
+  /** Scrolls to an element after the view/tab has had a frame to render. */
+  const scrollToEl = useCallback((id: string, delay = 70) => {
+    window.setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, delay);
+  }, []);
+
+  const changeView = useCallback((next: AppView) => {
+    setView(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  /** Opens the PYQ Analysis tab (the exam-priority step). */
+  const goPyq = useCallback(() => {
+    setView("home");
+    setAnalysisTab("pyq");
+    scrollToEl("analysis", 90);
+  }, [scrollToEl]);
+
+  /** Opens My Study Space, optionally jumping to one of its four panels. */
+  const openSpace = useCallback(
+    (anchor?: SpaceAnchor) => {
+      setView("space");
+      if (anchor) scrollToEl(anchor, 120);
+      else window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [scrollToEl],
+  );
+
+  /** Dashboard feature-card actions — every one lands on a real flow. */
+  const handleHeroAction = useCallback(
+    (action: DashboardAction) => {
+      switch (action) {
+        case "syllabus":
+          setView("home");
+          scrollToEl("syllabus-form", 60);
+          break;
+        case "pyq":
+          if (topics.length === 0) {
+            notify("Pehle syllabus analyse karo — phir purane papers daalenge.");
+            setView("home");
+            scrollToEl("syllabus-form", 60);
+            return;
+          }
+          goPyq();
+          break;
+        case "complete":
+          if (!linksReady) {
+            notify("Search links abhi nahi bane — pehle analysis complete karo.");
+            return;
+          }
+          setView("playlists");
+          setPlaylistTab("complete");
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          break;
+        case "smart":
+          if (topics.length === 0) {
+            notify("Pehle syllabus analyse karo — phir exam priority milegi.");
+            setView("home");
+            scrollToEl("syllabus-form", 60);
+            return;
+          }
+          goPyq();
+          break;
+        case "space":
+          openSpace();
+          break;
+      }
+    },
+    [topics.length, linksReady, notify, scrollToEl, goPyq, openSpace],
+  );
+
+  /* --------------------------- topic accordion -------------------------- */
+  const toggleUnit = useCallback((key: string) => {
+    setExpandedUnits((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const expandAll = useCallback(
+    () => setExpandedUnits(new Set(displayTopics.map(unitKeyOf))),
+    [displayTopics],
+  );
+  const collapseAll = useCallback(() => setExpandedUnits(new Set()), []);
 
   /* --------------------------- scroll tracking --------------------------- */
   useEffect(() => {
@@ -483,12 +595,44 @@ export default function Home() {
 
     panels.forEach((panel) => observer.observe(panel));
     return () => observer.disconnect();
-  }, [topics, completed]);
+    // Tabs and accordion expansion change which panels exist on screen.
+  }, [topics, completed, view, analysisTab, expandedUnits]);
 
-  const jumpTo = useCallback((id: string) => {
-    document.getElementById(`topic-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    setActiveId(id);
-  }, []);
+  /**
+   * Jump to one topic: make sure its tab is open, its unit expanded, then
+   * scroll. Works from the sidebar, the study order, playlists and progress —
+   * even when the student is on a completely different view.
+   */
+  const jumpTo = useCallback(
+    (id: string) => {
+      const topic = topics.find((t) => t.id === id);
+      const scrollToTopic = () => {
+        document
+          .getElementById(`topic-${id}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+
+      if (topic) {
+        const key = unitKeyOf(topic);
+        setExpandedUnits((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+      }
+
+      const onList =
+        view === "home" &&
+        (analysisTab === "all" || analysisTab === "important") &&
+        document.getElementById(`topic-${id}`) !== null;
+
+      if (onList) {
+        window.setTimeout(scrollToTopic, 70);
+      } else {
+        setView("home");
+        setAnalysisTab("all");
+        window.setTimeout(scrollToTopic, 170);
+      }
+      setActiveId(id);
+    },
+    [topics, view, analysisTab],
+  );
 
   /* ------------------------------- exports ------------------------------- */
   const hasLinks = videoCount > 0;
@@ -566,16 +710,88 @@ export default function Home() {
   /* --------------------------------- UI ---------------------------------- */
   /** Which of the three steps the student is looking at right now. */
   const step: 1 | 2 | 3 = topics.length === 0 ? 1 : phase === "papers" ? 2 : 3;
-  const mustCount = useMemo(
-    () => [...bandByTopic.values()].filter((b) => b === "must").length,
-    [bandByTopic],
+
+  const bandCounts = useMemo(() => {
+    let must = 0;
+    let should = 0;
+    let ifTime = 0;
+    for (const band of bandByTopic.values()) {
+      if (band === "must") must++;
+      else if (band === "should") should++;
+      else ifTime++;
+    }
+    return { must, should, ifTime };
+  }, [bandByTopic]);
+
+  /** The "important" tab: must-do with papers, core+important without. */
+  const importantTopics = useMemo(
+    () =>
+      displayTopics.filter((topic) =>
+        exam.plan ? bandByTopic.get(topic.id) === "must" : topic.importance !== "bonus",
+      ),
+    [displayTopics, exam.plan, bandByTopic],
+  );
+
+  const activeTopicList = analysisTab === "important" ? importantTopics : displayTopics;
+
+  /** Shown where links do not exist yet — never fake skeletons forever. */
+  const linksHint = (
+    <div className="card p-5 text-center">
+      <p className="text-sm leading-relaxed text-[var(--muted)]">
+        Search links abhi bane nahi — PYQ step complete karo (ya skip karo), phir har topic ke
+        links yahan mil jayenge.
+      </p>
+      <div className="mt-3 flex flex-wrap justify-center gap-2">
+        <button type="button" onClick={goPyq} className="btn-primary px-4 py-2 text-xs">
+          PYQ Analysis par jao →
+        </button>
+        {phase === "papers" && !exam.plan && (
+          <button type="button" onClick={skipPapers} className="btn-ghost px-4 py-2 text-xs">
+            Skip karo → links banao
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderTopicPanel = (topic: Topic, index: number) => (
+    <TopicPanel
+      key={topic.id}
+      topic={topic}
+      index={index}
+      result={results[topic.id]}
+      studied={isStudied(topic.title)}
+      subject={subjectName}
+      syllabus={syllabus}
+      examEntry={examByTopic.get(topic.id)}
+      band={bandByTopic.get(topic.id) ?? "should"}
+      pyqQuestions={pyqByTopic.get(topic.id)}
+      onToggleStudied={() => handleToggleStudied(topic.title)}
+    />
+  );
+
+  const playlistBoard = (
+    <PlaylistBoard
+      topics={topics}
+      priorityTopics={displayTopics}
+      results={results}
+      bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
+      plan={exam.plan}
+      active={playlistTab}
+      onChange={setPlaylistTab}
+      onJump={jumpTo}
+    />
   );
 
   return (
     <>
       <header className="sticky top-0 z-30 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => changeView("home")}
+            className="flex items-center gap-2.5 text-left"
+          >
             <span
               className="grid h-9 w-9 place-items-center rounded-xl text-white"
               style={{ background: "linear-gradient(135deg, var(--brand), var(--brand-2))" }}
@@ -584,11 +800,13 @@ export default function Home() {
             </span>
             <div>
               <p className="text-[0.95rem] font-extrabold leading-none">ExamSmasher</p>
-              <p className="mt-0.5 text-[0.68rem] text-[var(--muted)]">
+              <p className="mt-0.5 hidden text-[0.68rem] text-[var(--muted)] sm:block">
                 Past papers → exam priority → notes, PYQs & search links
               </p>
             </div>
-          </div>
+          </button>
+
+          <SiteNav view={view} onChange={changeView} />
 
           <div className="flex items-center gap-2">
             <AiStatusChip />
@@ -597,319 +815,240 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-20 pt-8 sm:px-6">
-        <StepsBar current={step} />
-
-        {/* Hero — only before the first analysis */}
-        {phase === "idle" && topics.length === 0 && (
-          <section className="mb-8 text-center">
-            <h1 className="mx-auto max-w-3xl text-3xl font-extrabold leading-tight sm:text-5xl">
-              Kam time me zyada <span className="gradient-text">marks</span> — teen step me.
-            </h1>
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-[var(--muted)] sm:text-base">
-              Syllabus paste karo, apne <strong className="text-[var(--text)]">purane papers</strong>{" "}
-              daalo (optional hai), aur app khud batayega — kaunsa topic{" "}
-              <strong className="text-[var(--text)]">Must</strong> hai, kaunsa{" "}
-              <strong className="text-[var(--text)]">Can skip</strong> — aur usi order me har topic
-              ke YouTube search links, notes aur solved PYQs de dega. Bas tu padh.
-            </p>
-
-            <div className="mx-auto mt-7 grid max-w-4xl gap-3 sm:grid-cols-3">
-              {[
-                {
-                  icon: <span className="text-lg">📝</span>,
-                  title: "1 · Syllabus daalo",
-                  body: "Apna syllabus paste karo — browser AI ya rule engine har unit ke alag study topics banayega.",
-                },
-                {
-                  icon: <span className="text-lg">🎯</span>,
-                  title: "2 · PYQ se importance",
-                  body: "Purane papers daalo toh har topic par Must / Might / Can skip ka tag lagega — asli trend se, guess se nahi. Skip bhi kar sakte ho.",
-                },
-                {
-                  icon: <span className="text-lg">📚</span>,
-                  title: "3 · Links, notes, jawab",
-                  body: "Har topic ke YouTube search links (important pehle), poore syllabus ke notes, aur har PYQ sawaal ka jawab uske neeche hi.",
-                },
-              ].map((feature) => (
-                <div key={feature.title} className="card p-4 text-left">
-                  <span
-                    className="mb-2 grid h-9 w-9 place-items-center rounded-xl text-white"
-                    style={{ background: "linear-gradient(135deg, var(--brand), var(--brand-2))" }}
-                  >
-                    {feature.icon}
-                  </span>
-                  <p className="text-sm font-bold">{feature.title}</p>
-                  <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">{feature.body}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <SyllabusForm
-          syllabus={syllabus}
-          onSyllabusChange={setSyllabus}
-          subject={subject}
-          onSubjectChange={setSubject}
-          language={language}
-          onLanguageChange={setLanguage}
-          perTopic={perTopic}
-          onPerTopicChange={setPerTopic}
-          onStart={startAnalysis}
-          onReset={resetAll}
-          onLoadSample={() => {
-            setSyllabus(SAMPLE_SYLLABUS);
-            setSubject(SAMPLE_SUBJECT);
-            notify("Sample syllabus loaded — hit Analyse!");
-          }}
-          onFileText={handleFileText}
-          onFileError={handleFileError}
-          busy={busy}
-          hasResults={topics.length > 0}
-          error={formError}
-        />
-
-        {/* Results */}
-        {topics.length > 0 && (
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-24 pt-8 sm:px-6 md:pb-20">
+        {view === "home" && (
           <>
-            {/* Step 2 — real papers decide what matters. Videos wait for it. */}
-            <section className="mt-8">
-              <StepHeading
-                n={2}
-                title="PYQ importance — kaunsa topic kitna important hai"
-                subtitle="Purane papers daalo: har sawaal ka jawab uske neeche + Easy/Medium/Hard tag, aur har topic par Must / Might / Can skip. Papers nahi hain toh skip bhi kar sakte ho."
-                done={Boolean(exam.plan)}
-              />
+            <StepsBar current={step} />
 
-              <ExamMode
-                topics={topics}
-                subject={subjectName}
+            <HeroDashboard onAction={handleHeroAction} onSpace={openSpace} />
+
+            <div id="syllabus-form" className="scroll-mt-24">
+              <SyllabusForm
                 syllabus={syllabus}
-                exam={exam}
-                setExam={setExam}
-                onPlanBuilt={handlePlanBuilt}
-                onJumpToTopic={jumpTo}
+                onSyllabusChange={setSyllabus}
+                subject={subject}
+                onSubjectChange={setSubject}
+                language={language}
+                onLanguageChange={setLanguage}
+                perTopic={perTopic}
+                onPerTopicChange={setPerTopic}
+                onStart={startAnalysis}
+                onReset={resetAll}
+                onLoadSample={() => {
+                  setSyllabus(SAMPLE_SYLLABUS);
+                  setSubject(SAMPLE_SUBJECT);
+                  notify("Sample syllabus loaded — hit Analyse!");
+                }}
+                onFileText={handleFileText}
+                onFileError={handleFileError}
+                busy={busy}
+                hasResults={topics.length > 0}
+                error={formError}
               />
+            </div>
 
-              {phase === "papers" && !exam.plan && (
-                <div className="card mt-3 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                  <p className="text-xs leading-relaxed text-[var(--muted)]">
-                    Purane papers nahi hain? Koi baat nahi — importance syllabus se nikaal ke
-                    search links bana deta hoon.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={skipPapers}
-                    className="btn-primary shrink-0 px-4 py-2 text-xs"
-                  >
-                    Skip karo → seedha search links banao →
-                  </button>
-                </div>
-              )}
-
-              {pyqSkipped && !exam.plan && phase !== "papers" && (
-                <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">
-                  ⏭️ PYQ step chhod diya — Must/Might/Can skip ke tags syllabus importance se
-                  bané hain. Upar papers daal kar kabhi bhi asli trend paa sakte ho.
-                </p>
-              )}
-            </section>
-
-            {/* Step 3 — everything to actually study with, in the order above */}
-            {(phase === "matching" || phase === "done") && (
-              <section className="mt-8">
-                <StepHeading
-                  n={3}
-                  title="Links, notes & practice"
-                  subtitle="Must-do topics pehle — har topic ke YouTube search links, poore syllabus ke notes aur PYQ practice, sab isi page par."
-                  done={phase === "done"}
+            {/* Analysis — one tabbed workspace instead of one long page */}
+            {topics.length > 0 && (
+              <section id="analysis" className="mt-8 scroll-mt-24">
+                <TabBar
+                  ariaLabel="Analysis sections"
+                  active={analysisTab}
+                  onChange={(id) => setAnalysisTab(id as AnalysisTab)}
+                  tabs={[
+                    { id: "overview", label: "Overview" },
+                    { id: "all", label: "All Topics", badge: String(topics.length) },
+                    {
+                      id: "important",
+                      label: "Important Topics",
+                      badge: String(importantTopics.length),
+                    },
+                    {
+                      id: "pyq",
+                      label: "PYQ Analysis",
+                      ...(exam.papers.length > 0 ? { badge: String(exam.papers.length) } : {}),
+                    },
+                    { id: "playlists", label: "Video Playlists" },
+                  ]}
                 />
 
-                <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                  <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-                    <Stat label="Topics" value={String(topics.length)} />
-                    <Stat label="Must-do" value={String(mustCount)} accent />
-                    <Stat
-                      label="Topics with real PYQs"
-                      value={exam.plan ? `${pyqCovered}/${topics.length}` : "—"}
-                      accent
+                <div className="mt-3">
+                  {analysisTab === "overview" && (
+                    <OverviewPanel
+                      stats={{
+                        topics: topics.length,
+                        must: bandCounts.must,
+                        should: bandCounts.should,
+                        ifTime: bandCounts.ifTime,
+                        pyqCovered,
+                        links: videoCount,
+                        matched: matchedTopics,
+                        papers: exam.papers.length,
+                        studied: studiedCount,
+                      }}
+                      phase={phase}
+                      hasPlan={Boolean(exam.plan)}
+                      pyqSkipped={pyqSkipped}
+                      allStudied={allStudied}
+                      hasLinks={hasLinks}
+                      onTodo={() => setTodoOpen(true)}
+                      onRematch={rematchVideos}
+                      onCopy={handleCopy}
+                      onDownloadMd={handleDownloadMd}
+                      onDownloadCsv={handleDownloadCsv}
+                      onResetProgress={() => {
+                        clearStudied();
+                        notify("Progress reset — sab topics dobara pending.");
+                      }}
+                      onGeneratePlan={generatePlan}
+                      onGoPyq={goPyq}
+                      onSkip={skipPapers}
                     />
-                    <Stat label="Search links" value={String(videoCount)} />
-                    {exam.papers.length > 0 && (
-                      <Stat label="Past papers" value={String(exam.papers.length)} accent />
-                    )}
-                    <Stat
-                      label="Studied"
-                      value={`${studiedCount}/${topics.length}`}
-                      accent
-                    />
-                  </div>
+                  )}
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTodoOpen(true)}
-                      className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
-                      title="Your personal to-do list"
-                    >
-                      <ListIcon width={14} height={14} /> To-do
-                    </button>
-                    <button
-                      type="button"
-                      onClick={rematchVideos}
-                      disabled={phase === "matching"}
-                      className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
-                      title="Rebuild the search links (studied topics are skipped)"
-                    >
-                      <RefreshIcon width={14} height={14} /> Re-match
-                    </button>
+                  {(analysisTab === "all" || analysisTab === "important") &&
+                    (linksReady ? (
+                      activeTopicList.length === 0 ? (
+                        <div className="card p-5 text-center text-sm text-[var(--muted)]">
+                          Is view me koi topic nahi — All Topics tab me poora syllabus dekho.
+                        </div>
+                      ) : (
+                        <div className="grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+                          <TopicSidebar
+                            topics={displayTopics}
+                            results={results}
+                            activeId={activeId}
+                            onJump={jumpTo}
+                            phase={phase}
+                            completed={completed}
+                            videoCount={videoCount}
+                            studiedCount={studiedCount}
+                            isStudied={isStudied}
+                            onToggleStudied={handleToggleStudied}
+                            bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
+                          />
 
-                    {/* One Export menu instead of three loose buttons */}
-                    <details className="relative">
-                      <summary className="btn-ghost flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs [&::-webkit-details-marker]:hidden">
-                        <DownloadIcon width={14} height={14} /> Export ▾
-                      </summary>
-                      <div
-                        className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border p-1"
-                        style={{
-                          background: "var(--surface)",
-                          borderColor: "var(--line)",
-                          boxShadow: "var(--shadow-card)",
-                        }}
-                      >
-                        {[
-                          {
-                            label: "Copy list",
-                            icon: <CopyIcon width={13} height={13} />,
-                            onClick: handleCopy,
-                            disabled: !hasLinks,
-                          },
-                          {
-                            label: "Markdown (.md)",
-                            icon: <DownloadIcon width={13} height={13} />,
-                            onClick: handleDownloadMd,
-                            disabled: !hasLinks,
-                          },
-                          {
-                            label: "CSV",
-                            icon: <DownloadIcon width={13} height={13} />,
-                            onClick: handleDownloadCsv,
-                            disabled: !hasLinks,
-                          },
-                          ...(studiedCount > 0
-                            ? [
-                                {
-                                  label: "Reset progress",
-                                  icon: <CheckIcon width={13} height={13} />,
-                                  onClick: () => {
-                                    clearStudied();
-                                    notify("Progress reset — sab topics dobara pending.");
-                                  },
-                                  disabled: false,
-                                },
-                              ]
-                            : []),
-                        ].map((item) => (
-                          <button
-                            key={item.label}
-                            type="button"
-                            onClick={item.onClick}
-                            disabled={item.disabled}
-                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-semibold transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
-                          >
-                            {item.icon} {item.label}
-                          </button>
-                        ))}
-                      </div>
-                    </details>
-
-                    <button
-                      type="button"
-                      onClick={generatePlan}
-                      disabled={phase === "matching" || topics.length === 0}
-                      className="btn-primary flex items-center gap-1.5 px-3.5 py-2 text-xs"
-                    >
-                      <CalendarIcon width={14} height={14} /> Study plan
-                    </button>
-                  </div>
-                </div>
-
-                {/* Whole syllabus as one long document — read it like a textbook */}
-                <FullNotesPanel syllabus={syllabus} subject={subjectName} topics={topics} />
-
-                <div className="mt-6 grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
-                  <TopicSidebar
-                    topics={displayTopics}
-                    results={results}
-                    activeId={activeId}
-                    onJump={jumpTo}
-                    phase={phase}
-                    completed={completed}
-                    videoCount={videoCount}
-                    studiedCount={studiedCount}
-                    isStudied={isStudied}
-                    onToggleStudied={handleToggleStudied}
-                    bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
-                  />
-
-                  <div className="space-y-10">
-                    {displayTopics.map((topic, index) => (
-                      <TopicPanel
-                        key={topic.id}
-                        topic={topic}
-                        index={index}
-                        result={results[topic.id]}
-                        studied={isStudied(topic.title)}
-                        subject={subjectName}
-                        syllabus={syllabus}
-                        examEntry={examByTopic.get(topic.id)}
-                        band={bandByTopic.get(topic.id) ?? "should"}
-                        pyqQuestions={pyqByTopic.get(topic.id)}
-                        onToggleStudied={() => handleToggleStudied(topic.title)}
-                      />
+                          <TopicAccordion
+                            topics={activeTopicList}
+                            expanded={expandedUnits}
+                            onToggleUnit={toggleUnit}
+                            onExpandAll={expandAll}
+                            onCollapseAll={collapseAll}
+                            renderTopic={renderTopicPanel}
+                          />
+                        </div>
+                      )
+                    ) : (
+                      linksHint
                     ))}
 
-                    {phase === "done" && (
-                      <div className="card p-5 text-center">
-                        {allStudied ? (
-                          <>
-                            <p className="text-sm font-bold">🎉 Poori syllabus cover ho gayi!</p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">
-                              Sab {topics.length} topics studied — ab revision aur practice pe
-                              focus karo.
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <p className="text-sm font-bold">
-                              🎉 Analysis complete — {matchedTopics}/{topics.length} topics par
-                              search links ban gaye.
-                            </p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">
-                              {studiedCount > 0
-                                ? `${topics.length - studiedCount} topics baaki · padhte jao aur tick karte jao.`
-                                : "Padhna shuru karo — har topic par tick lagate jao, progress save rehta hai."}
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  {analysisTab === "pyq" && (
+                    <div className="space-y-3">
+                      <StepHeading
+                        n={2}
+                        title="PYQ importance — kaunsa topic kitna important hai"
+                        subtitle="Purane papers daalo: har topic par Must / Might / Can skip ka asli trend, aur har sawaal ka uska place. Papers nahi hain toh skip bhi kar sakte ho."
+                        done={Boolean(exam.plan)}
+                      />
 
-                {/* Honest gap list — which topics your papers never asked about */}
-                {phase === "done" && (
-                  <CoverageReport
-                    topics={displayTopics}
-                    results={results}
-                    pyqByTopic={pyqByTopic}
-                    onJumpToTopic={jumpTo}
-                  />
-                )}
+                      <ExamMode
+                        topics={topics}
+                        subject={subjectName}
+                        exam={exam}
+                        setExam={setExam}
+                        onPlanBuilt={handlePlanBuilt}
+                        onJumpToTopic={jumpTo}
+                        onOpenSpace={() => changeView("space")}
+                      />
+
+                      {phase === "papers" && !exam.plan && (
+                        <div className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                          <p className="text-xs leading-relaxed text-[var(--muted)]">
+                            Purane papers nahi hain? Koi baat nahi — importance syllabus se nikaal ke
+                            search links bana deta hoon.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={skipPapers}
+                            className="btn-primary shrink-0 px-4 py-2 text-xs"
+                          >
+                            Skip karo → seedha search links banao →
+                          </button>
+                        </div>
+                      )}
+
+                      {pyqSkipped && !exam.plan && phase !== "papers" && (
+                        <p className="text-xs leading-relaxed text-[var(--muted)]">
+                          ⏭️ PYQ step chhod diya — Must/Might/Can skip ke tags syllabus importance
+                          se bané hain. Upar papers daal kar kabhi bhi asli trend paa sakte ho.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {analysisTab === "playlists" && (linksReady ? playlistBoard : linksHint)}
+                </div>
               </section>
             )}
           </>
+        )}
+
+        {view === "space" && (
+          <StudySpacePanel
+            hasTopics={topics.length > 0}
+            topics={displayTopics}
+            results={results}
+            pyqByTopic={pyqByTopic}
+            subject={subjectName}
+            syllabus={syllabus}
+            questions={exam.questions}
+            plan={exam.plan}
+            stats={{
+              topics: topics.length,
+              studied: studiedCount,
+              must: bandCounts.must,
+              links: videoCount,
+            }}
+            onJump={jumpTo}
+            onHome={() => changeView("home")}
+            onGoPyq={goPyq}
+          />
+        )}
+
+        {view === "playlists" && (
+          <div className="space-y-4">
+            <div>
+              <h1 className="text-xl font-extrabold">My Playlists</h1>
+              <p className="mt-0.5 text-sm text-[var(--muted)]">
+                Do playlist — poore syllabus ke search links, ya exam priority ke hisaab se.
+              </p>
+            </div>
+            {linksReady ? (
+              playlistBoard
+            ) : (
+              <div className="card p-5 text-center">
+                <p className="text-sm leading-relaxed text-[var(--muted)]">
+                  Search links abhi nahi bane — pehle syllabus analyse karo, phir dono playlists
+                  yahan mil jayengi.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => changeView("home")}
+                  className="btn-primary mt-3 px-4 py-2 text-xs"
+                >
+                  Home par jao →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "settings" && (
+          <SettingsPanel
+            language={language}
+            onLanguageChange={setLanguage}
+            perTopic={perTopic}
+            onPerTopicChange={setPerTopic}
+          />
         )}
       </main>
 
@@ -937,25 +1076,13 @@ export default function Home() {
       />
 
       {toast && (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+        <div className="pointer-events-none fixed bottom-24 left-1/2 z-50 -translate-x-1/2 sm:bottom-6">
           <div className="card animate-fade-up px-4 py-2.5 text-sm font-semibold">{toast}</div>
         </div>
       )}
-    </>
-  );
-}
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div>
-      <p className="text-[0.68rem] uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p
-        className="text-sm font-extrabold"
-        style={accent ? { color: "var(--brand)" } : undefined}
-      >
-        {value}
-      </p>
-    </div>
+      <BottomNav view={view} onChange={changeView} />
+    </>
   );
 }
 
