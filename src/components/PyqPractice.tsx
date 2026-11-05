@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { buildAnswer } from "@/lib/engine";
 import { renderMarkdown } from "@/lib/markdown";
-import type { PyqQuestion, Topic } from "@/lib/types";
+import type { AnswerResponse, PyqQuestion, Topic } from "@/lib/types";
 import { AlertIcon, RefreshIcon } from "./Icons";
 import { Tex } from "./Tex";
 
@@ -11,22 +12,21 @@ interface PyqPracticeProps {
   /** Real past questions that map to THIS topic. */
   questions: PyqQuestion[];
   subject: string;
-}
-
-interface AnswerResponse {
-  ok: boolean;
-  answer?: string;
-  error?: string;
+  /** Syllabus text, so the answer framework can quote the student's own points. */
+  syllabus?: string;
+  /** All extracted topics, so the answer can name the right one. */
+  topics?: Topic[];
 }
 
 /**
  * Solve the actual past questions for one topic.
  *
  * The student can attempt first (so practice is active, not passive) and then
- * reveal a model answer scaled to the question's real marks, followed by what
- * examiners specifically mark down for.
+ * reveal an answer framework scaled to the question's real marks. It is
+ * labelled a framework, not a verified model answer — it is built from the
+ * syllabus the student pasted, not from a textbook we have not read.
  */
-export function PyqPractice({ topic, questions, subject }: PyqPracticeProps) {
+export function PyqPractice({ topic, questions, subject, syllabus, topics = [] }: PyqPracticeProps) {
   const [open, setOpen] = useState(false);
 
   if (questions.length === 0) return null;
@@ -51,6 +51,8 @@ export function PyqPractice({ topic, questions, subject }: PyqPracticeProps) {
               question={question}
               topicTitle={topic.title}
               subject={subject}
+              syllabus={syllabus}
+              topics={topics}
             />
           ))}
         </div>
@@ -63,14 +65,19 @@ function PracticeCard({
   question,
   topicTitle,
   subject,
+  syllabus,
+  topics,
 }: {
   question: PyqQuestion;
   topicTitle: string;
   subject: string;
+  syllabus?: string;
+  topics: Topic[];
 }) {
   const [attempt, setAttempt] = useState("");
   const [showAnswer, setShowAnswer] = useState(false);
   const [answer, setAnswer] = useState<string | null>(null);
+  const [source, setSource] = useState<"ai" | "rules" | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selfMark, setSelfMark] = useState<"got" | "missed" | null>(null);
@@ -83,20 +90,18 @@ function PracticeCard({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/answer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: question.text,
-          subject,
-          topicTitle,
-          marks: question.marks,
-          year: question.paperYear,
-        }),
+      const data: AnswerResponse = await buildAnswer({
+        question: question.text,
+        subject,
+        topicTitle,
+        marks: question.marks,
+        year: question.paperYear,
+        syllabus,
+        topics,
       });
-      const data: AnswerResponse = await response.json();
       if (!data.ok || !data.answer) throw new Error(data.error || "Could not write an answer.");
       setAnswer(data.answer);
+      setSource(data.source ?? "rules");
       setShowAnswer(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not write an answer.");
@@ -154,13 +159,13 @@ function PracticeCard({
               Writing…
             </>
           ) : showAnswer ? (
-            "Hide model answer"
+            "Hide answer"
           ) : answer ? (
             <>
-              <RefreshIcon width={12} height={12} /> Show model answer
+              <RefreshIcon width={12} height={12} /> Show answer
             </>
           ) : (
-            "📖 Model answer"
+            "📖 Answer"
           )}
         </button>
 
@@ -201,19 +206,33 @@ function PracticeCard({
         </p>
       )}
 
-      {/* The model answer, exactly as an examiner would write it — headings,
-          steps, and equations typeset instead of raw LaTeX. */}
+      {/* The answer, scaled to the question's real marks — headings, steps,
+          and equations typeset instead of raw LaTeX. */}
       {showAnswer && answer && (
-        <div
-          className="plan-markdown mt-2.5 rounded-lg p-3 text-[0.82rem] leading-relaxed"
-          style={{ background: "var(--surface)" }}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(answer) }}
-        />
+        <>
+          <div
+            className="plan-markdown mt-2.5 rounded-lg p-3 text-[0.82rem] leading-relaxed"
+            style={{ background: "var(--surface)" }}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(answer) }}
+          />
+          <p
+            className="mt-1.5 text-[0.68rem] text-[var(--muted)]"
+            title={
+              source === "ai"
+                ? "Written by the model running locally in this browser"
+                : "An answer framework built from your own syllabus — not a verified textbook answer"
+            }
+          >
+            {source === "ai"
+              ? "🧠 Browser AI model ne likha — apne textbook se match zaroor karna."
+              : "📄 Syllabus se bana answer framework — ye verified textbook answer nahi hai."}
+          </p>
+        </>
       )}
 
       {showAnswer && attempt.trim().length > 10 && !answer && !loading && (
         <p className="mt-1.5 text-[0.7rem] text-[var(--muted)]">
-          Apna attempt upar likha hai — model answer khulne ke baad khud compare karo.
+          Apna attempt upar likha hai — answer khulne ke baad khud compare karo.
         </p>
       )}
     </article>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { downloadFile } from "@/lib/exporters";
 import { renderMarkdown } from "@/lib/markdown";
 import { AlertIcon, CopyIcon, DownloadIcon } from "./Icons";
@@ -11,6 +11,11 @@ interface DocPanelProps {
   buttonLabel: string;
   /** Extra line shown above the document once it exists (e.g. detected shape). */
   note?: string | null;
+  /**
+   * Attribution line shown once the document exists. Required so the panel
+   * never presents rule-engine output as model output (or the reverse).
+   */
+  extra?: ReactNode;
   /** Produces the Markdown. Errors thrown here are shown to the student. */
   onGenerate: () => Promise<string>;
   /** Filename stem for the download. */
@@ -29,6 +34,7 @@ export function DocPanel({
   subtitle,
   buttonLabel,
   note,
+  extra,
   onGenerate,
   filename,
 }: DocPanelProps) {
@@ -127,6 +133,8 @@ export function DocPanel({
           {note}
         </p>
       )}
+
+      {extra && markdown && !loading && <div className="mt-2">{extra}</div>}
 
       {open && (
         <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--line)" }}>

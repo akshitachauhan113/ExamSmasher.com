@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage, Topic } from "@/lib/types";
+import { buildChat } from "@/lib/engine";
+import type { ChatMessage, EngineSource, PyqQuestion, Topic } from "@/lib/types";
 import { ChatIcon, CloseIcon, SendIcon, SparklesIcon } from "./Icons";
 
 const STORAGE_KEY = "es-chat-v1";
@@ -10,8 +11,10 @@ const MAX_HISTORY = 30;
 interface ChatWidgetProps {
   subject: string;
   topics: Topic[];
-  /** Raw syllabus (truncated server-side) so answers stay inside the course. */
+  /** Raw syllabus (truncated client-side) so answers stay inside the course. */
   syllabus: string;
+  /** Real past questions, so the coach can quote the student's own papers. */
+  pastQuestions?: PyqQuestion[];
 }
 
 function loadHistory(): ChatMessage[] {
@@ -54,17 +57,21 @@ const QUICK_PROMPTS = [
 ];
 
 /**
- * Floating AI study coach.
+ * Floating study coach.
  *
- * Knows the student's subject, extracted topics and syllabus, so answers are
- * grounded in their actual course instead of generic advice.
+ * Knows the student's subject, extracted topics, syllabus and real past
+ * questions, so answers are grounded in their actual course instead of
+ * generic advice. Runs on the in-browser model when it has loaded, otherwise
+ * on the rule engine — and says which one produced the reply.
  */
-export function ChatWidget({ subject, topics, syllabus }: ChatWidgetProps) {
+export function ChatWidget({ subject, topics, syllabus, pastQuestions = [] }: ChatWidgetProps) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Which engine produced the most recent reply — shown, never guessed. */
+  const [lastSource, setLastSource] = useState<EngineSource | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -92,31 +99,26 @@ export function ChatWidget({ subject, topics, syllabus }: ChatWidgetProps) {
     setSending(true);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: content,
-          history: next.slice(0, -1),
-          subject,
-          topics: topics.map((t) => ({ title: t.title, description: t.description })),
-          syllabus,
-        }),
+      const data = await buildChat({
+        message: content,
+        history: next.slice(0, -1),
+        subject,
+        topics,
+        syllabus,
+        pastQuestions,
       });
-      const json = (await response.json().catch(() => null)) as
-        | { ok: boolean; reply?: string; error?: string }
-        | null;
 
-      const withReply: ChatMessage[] = json?.ok && json.reply
-        ? [...next, { role: "assistant", content: json.reply }]
+      const withReply: ChatMessage[] = data.ok && data.reply
+        ? [...next, { role: "assistant", content: data.reply }]
         : next;
       setMessages(withReply);
       saveHistory(withReply);
-      if (!json?.ok) setError(json?.error ?? "The coach could not reply — try again.");
+      setLastSource(data.source ?? "rules");
+      if (!data.ok) setError(data.error ?? "The coach could not reply — try again.");
     } catch {
       setMessages(next);
       saveHistory(next);
-      setError("Network error — check your connection.");
+      setError("Could not build a reply — try again.");
     } finally {
       setSending(false);
     }
@@ -141,7 +143,7 @@ export function ChatWidget({ subject, topics, syllabus }: ChatWidgetProps) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label={open ? "Close AI coach" : "Open AI coach"}
+        aria-label={open ? "Close study coach" : "Open study coach"}
         className="fixed bottom-5 right-5 z-40 grid h-14 w-14 place-items-center rounded-full shadow-2xl transition-transform hover:scale-105"
         style={{ background: "var(--brand)", color: "var(--brand-contrast, #fff)" }}
       >
@@ -152,7 +154,7 @@ export function ChatWidget({ subject, topics, syllabus }: ChatWidgetProps) {
         <div
           className="card fixed bottom-24 right-5 z-40 flex max-h-[72vh] w-[min(420px,calc(100vw-2.5rem))] flex-col overflow-hidden shadow-2xl"
           role="dialog"
-          aria-label="AI study coach"
+          aria-label="Study coach"
         >
           <header
             className="flex items-center justify-between gap-2 border-b px-4 py-3"
@@ -163,9 +165,23 @@ export function ChatWidget({ subject, topics, syllabus }: ChatWidgetProps) {
                 <SparklesIcon width={17} height={17} />
               </span>
               <div>
-                <h3 className="text-sm font-extrabold">AI study coach</h3>
+                <h3 className="text-sm font-extrabold">Study coach</h3>
                 <p className="text-[0.68rem] text-[var(--muted)]">
                   {subject || "Ask anything about your syllabus"}
+                  {lastSource ? (
+                    <>
+                      {" · "}
+                      <span
+                        title={
+                          lastSource === "ai"
+                            ? "Written by the in-browser model running on this device"
+                            : "Built from your syllabus and papers by the rule engine"
+                        }
+                      >
+                        {lastSource === "ai" ? "browser AI model" : "syllabus rules"}
+                      </span>
+                    </>
+                  ) : null}
                 </p>
               </div>
             </div>

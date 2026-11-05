@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import type { ExamTopic, QuizQuestion, QuizResponse } from "@/lib/types";
+import { buildQuiz, type QuizTopicInput } from "@/lib/engine";
+import type { EngineSource, ExamTopic, QuizQuestion, QuizResponse } from "@/lib/types";
 import { AlertIcon, RefreshIcon } from "./Icons";
 
 interface QuizBoxProps {
@@ -31,6 +32,8 @@ export function QuizBox({ topics, subject }: QuizBoxProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  /** Which engine produced this set of questions — shown in the result. */
+  const [source, setSource] = useState<EngineSource | null>(null);
 
   const start = useCallback(
     async (size: number) => {
@@ -38,25 +41,31 @@ export function QuizBox({ topics, subject }: QuizBoxProps) {
       setError(null);
       try {
         // Weight the quiz toward repeating topics — that is what the exam does.
-        const chosen = [...topics]
+        const chosen: QuizTopicInput[] = [...topics]
           .sort((a, b) => b.signal.examScore - a.signal.examScore)
           .slice(0, Math.max(6, size))
           .map((entry) => ({
             id: entry.topic.id,
             title: entry.topic.title,
-            pastQuestions: entry.signal.questions.slice(0, 4).map((q) => q.text),
+            chapter: entry.topic.chapter,
+            keywords: entry.topic.keywords,
+            description: entry.topic.description,
+            importance: entry.topic.importance,
+            difficulty: entry.topic.difficulty,
+            pastQuestions: entry.signal.questions.slice(0, 4).map((q) => ({
+              text: q.text,
+              year: q.paperYear,
+              label: q.paperLabel,
+              marks: q.marks,
+            })),
           }));
 
-        const response = await fetch("/api/quiz", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject, count: size, topics: chosen }),
-        });
-        const data: QuizResponse = await response.json();
+        const data: QuizResponse = await buildQuiz({ subject, count: size, topics: chosen });
         if (!data.ok || !data.questions?.length) {
           throw new Error(data.error || "Could not build the quiz.");
         }
 
+        setSource(data.source ?? "rules");
         setQuestions(data.questions);
         setIndex(0);
         setPicked(null);
@@ -249,6 +258,18 @@ export function QuizBox({ topics, subject }: QuizBoxProps) {
               : score >= questions.length * 0.5
                 ? "Theek hai — galat wale topics ke notes dobara padho."
                 : "Ye topics abhi kamzor hain — must-do band se shuru karo."}
+          </p>
+          <p
+            className="mt-1.5 text-[0.68rem] text-[var(--muted)]"
+            title={
+              source === "ai"
+                ? "Questions written by the model running locally in this browser"
+                : "Questions assembled from your own syllabus lines and real past questions"
+            }
+          >
+            {source === "ai"
+              ? "🧠 Browser AI model se bane sawaal — apne syllabus se check karo."
+              : "📄 Aapke syllabus aur asli PYQs se bane sawaal — ye past paper ke sawaal nahi hain."}
           </p>
           <div className="mt-3 flex justify-center gap-2">
             <button type="button" onClick={() => void start(count)} className="btn-primary px-3 py-1.5 text-xs">

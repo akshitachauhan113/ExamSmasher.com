@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ExamSmasher — Syllabus → Best Video Analysis",
+  title: "ExamSmasher — Syllabus → exam priority → notes, PYQs & links",
   description:
-    "Paste your syllabus and get an AI-analysed topic-by-topic map of the best YouTube explainer videos, matched by actual video content.",
+    "Paste your syllabus, add your old papers, and get Must / Might / Can skip per topic plus notes, solved PYQs and YouTube search links. Runs entirely in your browser with no API keys.",
 };
 
 /** Applies the saved theme before paint to avoid a flash of the wrong colours. */

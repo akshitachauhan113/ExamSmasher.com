@@ -1,121 +1,90 @@
-# ExamSmasher 🎓 — Syllabus → Best Video Analysis
+# ExamSmasher 🎓 — Syllabus → exam priority → notes, PYQs & study links
 
-Paste a syllabus, and ExamSmasher returns a topic-by-topic map of the **best YouTube explainer videos** for it — matched by actual video content, ranked with a transparent score, in your chosen language (English by default).
+Paste a syllabus and ExamSmasher tells you what to study **in the order that earns marks**: it splits the syllabus into topics, reads your old question papers to tag every topic **Must / Might / Can skip**, then hands you YouTube search links, notes and solved PYQs for each topic — all on one page.
 
 ```
-Syllabus text  →  AI splits it into topics  →  YouTube search per topic
-              →  transcript + metadata content match  →  AI ranks candidates
-              →  left: topics | right: best videos
+Syllabus text  →  topics  →  your old papers → Must / Might / Can skip
+                                    ↓
+              per-topic search links + notes + solved PYQs + practice
 ```
+
+## No API keys. At all.
+
+Everything runs in your browser:
+
+- **Rule-based engine** (`src/lib/engine/rules/`) — instant, offline, always works. A real parser and scorer built from your own text, not a placeholder.
+- **Optional browser AI** (`src/lib/ai/`) — `SmolLM2-360M-Instruct` downloaded once from Hugging Face and run locally on WebGPU (or WASM fallback). It upgrades the writing-heavy features (notes, answers, chat, quiz).
+
+The header chip reports the honest state: `Rules mode`, `AI loading… 42%`, or `AI ready · WebGPU`. The UI never claims a model answered when the rule engine did — every result carries a `source`.
+
+There is exactly **one** server route left: `POST /api/extract`, which reads an uploaded `.pdf` / `.docx` / `.txt` / photo of a syllabus (PDF and DOCX locally, photos via on-device Tesseract OCR). No key, no data leaves the machine.
 
 ## Features
 
-- **🔑 In-app API key setup** — a Settings panel where you paste a key, hit **Test** (it validates against the real API and says *why* if something's off), and **Save**. Keys land in the git-ignored `.env.local` and apply instantly — no file editing, no restart.
-- **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or a **photo of your syllabus**; the server reads it and fills the syllabus box. PDFs/docx are parsed locally, photos are read by **on-device OCR (works with zero API keys)** — and upgraded to AI vision automatically when a Gemini key is present.
-- **AI syllabus breakdown** — chapters become crisp, searchable study topics with importance, difficulty and estimated time. Bigger syllabi automatically produce **more topics** (up to 20), so a whole semester never collapses into a handful of videos.
-- **Real content matching** — not just the title: captions/transcripts are downloaded for the top candidates and checked against the topic's keywords, then an AI reads the excerpts and scores each video.
-- **🤖 Per-video AI summary** — "Summarise this video" on any card reads the actual transcript and lists what that video really teaches (and warns you when it *doesn't* match the topic), so you never waste 20 minutes on the wrong video.
-- **📝 Notes & flashcards per topic** — generate short, dense bullet-point notes (definitions, formulas, common mistakes, exam tips) plus 6–14 flip flashcards, written from *your* syllabus. Saved in the browser.
-- **🗓️ Daily planner** — the AI plan arrives as interactive day cards with checkboxes and a progress bar; tick items as you go. A Markdown version is still there for copy/export.
-- **✅ To-do list** — your own tasks ("Solve 2023 paper", "Revise Unit 3") with a progress bar, saved on your device.
-- **💬 AI study coach (chat)** — floating chat that knows your subject, your extracted topics and your syllabus. Ask doubts in Hinglish/English/Hindi — it mirrors your language and gives concrete next actions.
-- **▶️ Watch inside the app** — clicking a video opens an embedded player right there; "Open on YouTube" is one click away.
-- **✅ Checklist tracking** — tick topics as you study them. The sidebar shows "syllabus covered X%", how many topics are left and the remaining watch time. Progress is saved in your browser.
-- **"Already studied" awareness** — topics you tick are skipped on re-match (no wasted API quota), excluded from the AI study plan and marked in exports.
-- **Transparent scoring** — every video shows a 0–100 score, a reason chip ("Covers 5/5 keywords", "Transcript confirms the topic", "Trusted educator: Khan Academy") and an AI one-line summary.
-- **16 languages** — English, **Hinglish (default)**, Hindi, Urdu, Bengali, Tamil, Telugu, Spanish, French, German, Portuguese, Arabic, Japanese, Chinese, Russian, Turkish.
-- **Study tools** — copy the list, export Markdown or CSV.
+- **📎 File upload** — drop a `.pdf`, `.docx`, `.txt/.md` or a photo of your syllabus; PDFs/docx are parsed on the server, photos are read by on-device OCR.
+- **AI syllabus breakdown** — chapters become crisp study topics with importance, difficulty, estimated time and a chapter label. Bigger syllabi automatically produce more topics.
+- **🎯 PYQ importance (Step 2)** — upload old question papers; the parser reads the printed questions, maps each one to a syllabus topic and computes Must / Might / Can skip from the *real* trend. No papers? Skip the step and importance comes from the syllabus analysis instead.
+- **✅ Solved PYQs** — every past question gets an answer framework built from your own syllabus wording, plus an Easy/Medium/Hard tag and a mark-based structure.
+- **📝 Notes** — per-topic notes and a "whole syllabus as one document" panel, in Hinglish or English, with LaTeX maths rendering.
+- **🧠 Practice** — quiz generator, mock test paper built to match your real paper's pattern, and PYQ practice where you write your answer before revealing the model answer.
+- **💬 AI study coach** — floating chat that knows your subject, topics, syllabus and past questions.
+- **🗓️ Study plan** — a day-by-day plan with a progress bar, exported as Markdown.
+- **✅ To-do list** — your own tasks, saved on your device.
+- **🎬 Honest YouTube search links** — no YouTube API, no ranking, no invented titles or view counts. Each link opens YouTube's own results page for a query built from your syllabus wording.
+- **📊 Coverage report** — which topics your papers never asked about, so gaps are visible.
+- **16 languages** for search wording — English, **Hinglish (default)**, Hindi, Urdu, Bengali, Tamil, Telugu, Spanish, French, German, Portuguese, Arabic, Japanese, Chinese, Russian, Turkish.
+- **Study tools** — copy the list, export Markdown or CSV, tick topics as you study (progress saved in the browser).
 - **Light / dark theme**, fully responsive.
 
-## Setup (about 5 minutes — both keys are FREE)
-
-### 1. Install & run
+## Setup
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+Open <http://localhost:3000>. That's the whole setup — no keys, no accounts.
 
-### 2. Get a YouTube Data API key (free — 10,000 units/day)
-
-1. Open <https://console.cloud.google.com/apis/library/youtube.googleapis.com>
-2. Click **Enable**, then go to **Credentials → Create credentials → API key**
-3. Restrict it later if you like (HTTP referrers for localhost).
-
-### 3. Get a Gemini API key (free tier)
-
-1. Open <https://aistudio.google.com/apikey>
-2. **Create API key** → copy it.
-   *(Prefer OpenAI? Set `OPENAI_API_KEY` instead and leave Gemini empty.)*
-
-### 4. Add both keys — easiest way is inside the app
-
-**Option A (recommended): use the in-app panel**
-
-1. Start the dev server and open http://localhost:3000
-2. Click **API Keys** in the header (or the button on the yellow setup banner)
-3. Paste each key → **Test** to verify it → **Save keys**
-
-The keys are written to `.env.local` for you and take effect immediately — no restart, no file editing. **Test** calls the real API and explains exactly what is wrong (invalid key, API not enabled, quota exhausted).
-
-**Option B: edit the file yourself**
-
-```bash
-YOUTUBE_API_KEY=your_youtube_key
-GEMINI_API_KEY=your_gemini_key
-```
-
-in `.env.local`, then restart the dev server. The header chip will show `AI: gemini · YouTube ✓`.
-
-> Both keys stay on your machine: `.env.local` is git-ignored and is never committed.
-> Nothing fails silently — a banner tells you exactly which key is missing.
-
-## How the ranking works
-
-Each topic is scored on two axes and blended:
-
-| Axis | Signals |
-| --- | --- |
-| **Relevance (58%)** | topic keywords found in the title, description, and the video's transcript; penalty for "full course" dumps |
-| **Quality (42%)** | log-scaled views, like ratio, comment ratio, ideal duration (3–30 min), recency, captions, trusted-educator bonus |
-
-The top 12 candidates (after the fast pass) are then sent to the AI **with transcript excerpts**, which returns a 0–100 verdict per video. Final score = 50% deterministic + 50% AI. If the AI or transcript fetch is unavailable, ranking still works on metadata alone — the UI always shows which path was used.
+> The optional browser model (~270 MB first time) starts downloading in the background as soon as the page opens and is cached by the browser afterwards. The rule engine answers immediately whether or not it arrives.
 
 ## Project structure
 
 ```
 src/
   app/
-    page.tsx               Main UI (form + two-column results)
-    layout.tsx             Fonts, theme bootstrap, metadata
-    globals.css            Design tokens (light/dark) + shared styles
+    page.tsx                 Main UI — the three-step flow
+    layout.tsx               Fonts, theme bootstrap, metadata
+    globals.css              Design tokens (light/dark) + shared styles
     api/
-      analyze/route.ts     syllabus  → topics (AI)
-      extract/route.ts     uploaded file → syllabus text (pdf/docx/image)
-      videos/route.ts      topic    → ranked videos (YouTube + AI)
-      plan/route.ts        topics   → markdown study plan (AI)
-      keys/route.ts        save + validate API keys (dev only, whitelisted)
-      health/route.ts      key status for the setup banner
-  components/              Form, dropzone, sidebar, topic panels, player, key setup, modal
+      extract/route.ts       uploaded file → syllabus text (pdf/docx/OCR)
+  components/                Form, exam mode, topic panels, notes, quiz, chat, modals
   hooks/
-    useStudiedTopics.ts    localStorage-backed "topics I have studied" store
+    useStudiedTopics.ts      localStorage-backed "topics I have studied" store
+    useTodoList.ts           localStorage-backed to-do list
   lib/
-    llm.ts                 Gemini / OpenAI wrapper (JSON mode)
-    prompts.ts             All AI prompts
-    youtube.ts             Search, video details, transcript download
-    videos.ts              Per-topic pipeline (search → transcript → AI rank)
-    scoring.ts             Deterministic relevance + quality scoring
-    channels.ts            Trusted-educator list
-    exporters.ts           Markdown / CSV export
-    markdown.ts            Tiny safe Markdown renderer
+    engine/                  THE entry point every component calls
+      index.ts               feature facade: rules first, model optional
+      ai.ts                  prompts + re-normalisation for the browser model
+      rules/                 deterministic builders (syllabus, pyq, notes, quiz…)
+    ai/                      in-browser model plumbing
+      model.ts               lazy loader (WebGPU → WASM), progress, caching
+      run.ts                 withAi(): model when ready, rules otherwise
+      generate.ts            text/JSON generation with timeouts
+      status.ts              single source of truth for the chip
+    exam.ts                  paper signals, bands, expected questions
+    exporters.ts             Markdown / CSV export
+    markdown.ts, math.ts     safe Markdown renderer + KaTeX maths
 ```
 
-## API quota notes
+## How it works
 
-- YouTube **search.list** costs 100 units per query, **videos.list** costs 1. Default daily quota is 10,000 units — roughly 50 full analyses. Results are cached in memory for 20 minutes, so re-clicking is free.
-- Raise the topic cap in `src/app/api/analyze/route.ts` (`maxTopics`, 3–20) if you want longer syllabi.
+| Step | What happens |
+| --- | --- |
+| **1 · Syllabus** | `analyzeSyllabus` → rule parser splits units into topics (model may upgrade it). |
+| **2 · PYQ importance** | Papers are parsed verbatim (numbered questions, marks, sections), mapped to topics, and `exam.ts` counts the real trend into Must / Might / Can skip. Every number shown afterwards is counted from your papers. |
+| **3 · Links + notes** | Search links, notes, quizzes and answers are built in the plan's order (must-do first), each using the exam's own wording. |
+
+Every feature is a pair: a rule-based builder that always works, and — for most features — a model writer. `withAi` decides which one ran, and the result's `source` is shown to the student.
 
 ## Scripts
 
@@ -128,9 +97,8 @@ npm run lint    # eslint
 
 ## Notes & limits
 
-- **File reading needs no keys at all**: `.txt/.md`, PDFs and DOCX are parsed locally, and photos of a syllabus go through on-device Tesseract OCR. When a `GEMINI_API_KEY` is set, images are instead read by AI vision, which handles handwriting and messy layouts far better.
-- **AI analysis and video search do need keys** — see the setup section above. The UI tells you exactly which one is missing.
-- **Gemini models rotate often.** The default is `gemini-flash-lite-latest` (an alias Google keeps current, ~2 s per call); if a model is retired or overloaded the app automatically retries the next one, so you rarely need to touch `LLM_MODEL`.
-- Transcript download is best-effort: YouTube has no official transcript API, so captions are read from the public watch page first and then via public caption proxies (Piped/Invidious). When none of them answer, the app falls back to title/description matching and labels it **"metadata match"**.
-- Progress ticks live in `localStorage` per browser — clear them with **Reset progress** in the results toolbar.
-- Scores are a study aid, not gospel — always skim the first 2 minutes of a video before committing.
+- **File reading needs no keys**: `.txt/.md`, PDF and DOCX are parsed on the server, and photos go through on-device Tesseract OCR (~15 MB language data, downloaded once and cached).
+- **The browser model is optional.** If it cannot load (no WebAssembly/WebGPU, blocked CDN, offline), the chip says `Rules mode` and every feature still answers — built from your own text and labelled as such.
+- **Nothing is sent anywhere.** There is no backend AI call, no analytics, no YouTube API. Search links open YouTube's own results page.
+- Progress ticks and to-dos live in `localStorage` per browser — clear them with **Reset progress** in the results toolbar.
+- Rule-engine answers are frameworks built from your syllabus wording, not textbook keys — use them as a structure, then fill in what you know.

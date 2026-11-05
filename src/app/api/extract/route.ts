@@ -1,12 +1,13 @@
-import { generateVisionText, getLlmConfig } from "@/lib/llm";
-
 /**
  * Reads an uploaded syllabus file and returns its text so the normal
  * analysis pipeline can continue. Supported:
- *   - .txt / .md / .csv            -> read directly (no AI needed)
- *   - .pdf                         -> text layer via unpdf (no AI needed)
- *   - .docx                        -> text via mammoth (no AI needed)
- *   - .jpg / .png / .webp / ...    -> read by the AI (photo of a syllabus)
+ *   - .txt / .md / .csv            -> read directly
+ *   - .pdf                         -> text layer via unpdf
+ *   - .docx                        -> text via mammoth
+ *   - .jpg / .png / .webp / ...    -> on-device OCR (tesseract.js)
+ *
+ * Everything here runs without any API key. Photos are read by OCR rather
+ * than a vision model, because no key is required any more.
  */
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
@@ -16,7 +17,7 @@ const MAX_TEXT_CHARS = 24000;
 interface ExtractResponse {
   ok: boolean;
   text?: string;
-  method?: "direct" | "pdf" | "docx" | "vision" | "ocr";
+  method?: "direct" | "pdf" | "docx" | "ocr";
   fileName?: string;
   pageCount?: number;
   truncated?: boolean;
@@ -77,7 +78,7 @@ export async function POST(request: Request): Promise<Response> {
           {
             ok: false,
             error:
-              "This PDF has no selectable text (it is a scan). Export its pages as photos and upload those — images are read automatically, no AI key needed.",
+              "This PDF has no selectable text (it is a scan). Export its pages as photos and upload those — images are read automatically on-device, no API key needed.",
           },
           { status: 422 },
         );
@@ -96,35 +97,14 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     // ---- images (photo of a syllabus) -------------------------------------
-    // AI vision reads it best; without an AI key we fall back to on-device
-    // OCR (tesseract.js) so photos still work with zero keys configured.
+    // Read on-device with Tesseract OCR: no API key, no external vision call,
+    // and the upload never leaves the machine running the OCR.
     if (files.every((f) => f.type.startsWith("image/"))) {
-      const images = files.map((f, index) => ({
-        mimeType: f.type || "image/jpeg",
-        base64: buffers[index].toString("base64"),
-      }));
-
-      let visionError: unknown = null;
-      if (getLlmConfig()) {
-        try {
-          const text = await readImagesAsText(images);
-          return respond(text, "vision", primary.name, files.length);
-        } catch (err) {
-          visionError = err;
-        }
-      }
-
       try {
         const text = await ocrImages(buffers);
         return respond(text, "ocr", primary.name, files.length);
       } catch (ocrError) {
-        // Report the more specific failure when we have one.
-        const detail =
-          visionError instanceof Error
-            ? visionError.message
-            : ocrError instanceof Error
-              ? ocrError.message
-              : "Could not read the image.";
+        const detail = ocrError instanceof Error ? ocrError.message : "Could not read the image.";
         return Response.json({ ok: false, error: detail }, { status: 422 });
       }
     }
@@ -178,39 +158,9 @@ function respond(
   return Response.json(payload);
 }
 
-async function readImagesAsText(
-  images: Array<{ mimeType: string; base64: string }>,
-): Promise<string> {
-  const prompt = `You are transcribing a student's syllabus document. It may be a photo or screenshot of printed text, possibly at an angle or with uneven lighting.
-
-Transcribe the syllabus COMPLETELY and EXACTLY as written:
-- Keep every chapter / unit / module heading.
-- Keep the original numbering and order.
-- Include every listed topic, sub-topic and practical.
-- Do NOT summarise, simplify, translate or add anything.
-- Ignore watermarks, page numbers, headers and footers.
-- Output plain text only (no markdown, no commentary).
-
-If the images are unreadable, blurry beyond recognition, or clearly not a syllabus, reply with exactly: NOT_SYLLABUS`;
-
-  const answer = await generateVisionText(prompt, images, {
-    temperature: 0,
-    maxOutputTokens: 8192,
-    timeoutMs: 120_000,
-  });
-
-  const cleaned = answer.trim();
-  if (!cleaned || cleaned.includes("NOT_SYLLABUS")) {
-    throw new Error(
-      "The image could not be read as a syllabus. Try a clearer, straight-on photo with good lighting.",
-    );
-  }
-  return cleaned;
-}
-
 /**
  * Reads text straight off an image with Tesseract OCR. Runs entirely on this
- * machine — no API key, no quota, no data leaves the server except the
+ * machine — no API key, no quota, no data leaves the machine except the
  * language model download on first use (~15 MB, cached afterwards).
  */
 async function ocrImages(buffers: Buffer[]): Promise<string> {

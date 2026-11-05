@@ -51,7 +51,7 @@ export function TopicSidebar({
           <div className="text-right leading-tight">
             <span className="block text-sm font-bold">{topics.length} topics</span>
             <span className="block text-[0.68rem] font-semibold" style={{ color: "var(--brand)" }}>
-              {videoCount} videos matched
+              {videoCount} search links
             </span>
           </div>
         </div>
@@ -79,10 +79,10 @@ export function TopicSidebar({
           </p>
         </div>
 
-        {/* Match progress — videos being found */}
+        {/* Match progress — links built so far */}
         <div className="mt-3">
           <div className="flex items-baseline justify-between text-xs">
-            <span className="text-[var(--muted)]">Videos matched</span>
+            <span className="text-[var(--muted)]">Search links built</span>
             <span className="font-bold text-[var(--muted)]">
               {completed}/{topics.length}
             </span>
@@ -99,9 +99,9 @@ export function TopicSidebar({
         </div>
 
         <p className="mt-3 text-xs text-[var(--muted)]">
-          {phase === "analyzing" && "Reading your syllabus with AI…"}
-          {phase === "papers" && "Topics ready — ab PYQ importance ka step, ya seedha videos."}
-          {phase === "matching" && "Searching & matching videos, one topic at a time…"}
+          {phase === "analyzing" && "Reading your syllabus…"}
+          {phase === "papers" && "Topics ready — ab PYQ importance ka step, ya seedha links."}
+          {phase === "matching" && "Har topic ke YouTube search links bana raha hoon…"}
           {phase === "done" &&
             (studiedCount === topics.length
               ? "Poori syllabus cover ho gayi — badhiya! 🎉"
@@ -175,7 +175,7 @@ export function TopicSidebar({
                         ) : result ? (
                           <span
                             className="text-[var(--good)]"
-                            title={`${result.videos.length} videos matched`}
+                            title={`${result.searches.length} search links`}
                           >
                             <CheckIcon width={15} height={15} />
                           </span>

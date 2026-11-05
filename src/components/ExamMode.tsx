@@ -5,10 +5,19 @@ import {
   BAND_LABEL,
   TREND_LABEL,
 } from "@/lib/exam";
+import {
+  buildExamPlan,
+  buildMockTest,
+  buildSolutions,
+  parsePapers as parsePaperQuestions,
+} from "@/lib/engine";
 import { renderMarkdown } from "@/lib/markdown";
 import type {
+  EngineSource,
   ExamPlanResponse,
   ExamTopic,
+  MockTestResponse,
+  PapersResponse,
   PyqPaper,
   PyqQuestion,
   SolvedPaper,
@@ -23,6 +32,8 @@ import { Tex } from "./Tex";
 interface ExamModeProps {
   topics: Topic[];
   subject: string;
+  /** Raw syllabus text so answer frameworks can quote the student's own points. */
+  syllabus: string;
   /** Exam state lives in the page so re-analysing does not wipe uploaded papers. */
   exam: ExamState;
   setExam: (patch: Partial<ExamState>) => void;
@@ -62,13 +73,6 @@ interface ExtractResponse {
   error?: string;
 }
 
-interface PapersResponse {
-  ok: boolean;
-  questions?: PyqQuestion[];
-  papers?: PyqPaper[];
-  error?: string;
-}
-
 const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.csv,image/*";
 const MAX_PAPERS = 6;
 
@@ -92,6 +96,7 @@ const BAND_ORDER: ExamTopic["band"][] = ["must", "should", "if-time"];
 export function ExamMode({
   topics,
   subject,
+  syllabus,
   exam,
   setExam,
   onPlanBuilt,
@@ -175,20 +180,17 @@ export function ExamMode({
     setBusyPlan(true);
     setError(null);
     try {
-      const response = await fetch("/api/papers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subject,
-          papers: papers.map((p) => ({
-            id: p.id,
-            year: p.year.trim(),
-            label: p.label.trim() || "Question paper",
-            text: p.text,
-          })),
-        }),
+      // Runs entirely in this browser: a deterministic paper parser first,
+      // and only if it finds nothing does the model get a shot. No key.
+      const data: PapersResponse = await parsePaperQuestions({
+        subject,
+        papers: papers.map((p) => ({
+          id: p.id,
+          year: p.year.trim(),
+          label: p.label.trim() || "Question paper",
+          text: p.text,
+        })),
       });
-      const data: PapersResponse = await response.json();
       if (!data.ok || !data.questions?.length) {
         throw new Error(data.error || "No questions could be read.");
       }
@@ -213,17 +215,14 @@ export function ExamMode({
       setBusyPlan(true);
       setError(null);
       try {
-        const response = await fetch("/api/examplan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subject,
-            topics,
-            questions: questionList,
-            totalMinutes: hours ? hours * 60 : undefined,
-          }),
+        // Only the question → topic mapping may come from the browser model;
+        // every count and score is derived from the real papers either way.
+        const data: ExamPlanResponse = await buildExamPlan({
+          subject,
+          topics,
+          questions: questionList,
+          totalMinutes: hours ? hours * 60 : undefined,
         });
-        const data: ExamPlanResponse = await response.json();
         if (!data.ok || !data.topics?.length) {
           throw new Error(data.error || "Could not build the exam plan.");
         }
@@ -508,6 +507,7 @@ export function ExamMode({
             questions={questions}
             plan={plan}
             subject={plan.subject ?? subject}
+            syllabus={syllabus}
           />
 
           <QuizBox
@@ -523,7 +523,7 @@ export function ExamMode({
 /* -------------------------------------------------------------------------- */
 
 /**
- * The solved paper: every extracted question with its model answer directly
+ * The solved paper: every extracted question with its answer directly
  * underneath, tagged easy/medium/hard and important — one document instead of
  * a question sheet in one place and an answer key in another. Plus the
  * same-pattern mock test built from the same papers.
@@ -532,13 +532,19 @@ function PaperSolutions({
   questions,
   subject,
   plan,
+  syllabus,
 }: {
   questions: PyqQuestion[];
   subject: string;
   plan: ExamPlanResponse;
+  syllabus?: string;
 }) {
   const realQuestions = questions.filter((q) => !q.isVariant);
   const [solved, setSolved] = useState<SolvedPaper[] | null>(null);
+  /** Which engine produced the answer text currently on screen. */
+  const [solvedSource, setSolvedSource] = useState<EngineSource | null>(null);
+  /** Which engine produced the mock paper. */
+  const [mockSource, setMockSource] = useState<EngineSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAnswers, setShowAnswers] = useState(true);
@@ -552,27 +558,42 @@ function PaperSolutions({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/solutions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subject,
-          papers: papers.map((paper) => ({
-            label: paper.label,
-            year: paper.year,
-            questions: paper.questions.map((q) => ({
-              text: q.text,
-              marks: q.marks,
-              number: q.number,
-            })),
+      const examTopics = plan.topics ?? [];
+      const topics = examTopics.map((e) => e.topic);
+      const bands = new Map(examTopics.map((e) => [e.topic.id, e.band]));
+      // question id → which topic it was mapped to, straight from the plan.
+      const topicOf = new Map<string, string>();
+      for (const entry of examTopics) {
+        for (const q of entry.signal.questions ?? []) topicOf.set(q.id, entry.topic.id);
+      }
+
+      // Runs in this browser. The model may write the prose when it has
+      // loaded; otherwise the rule engine supplies an honest framework. Both
+      // paths label themselves in the UI below.
+      const data: SolutionsResponse = await buildSolutions({
+        subject,
+        syllabus,
+        topics,
+        bands,
+        papers: papers.map((paper) => ({
+          label: paper.label,
+          year: paper.year,
+          questions: paper.questions.map((q, index) => ({
+            index: index + 1,
+            text: q.text,
+            marks: q.marks,
+            number: q.number,
+            type: q.type,
+            topicId: topicOf.get(q.id),
+            repeatCount: q.repeatCount,
           })),
-        }),
+        })),
       });
-      const data: SolutionsResponse = await response.json();
       if (!data.ok || !data.papers?.length) {
         throw new Error(data.error || "Solutions nahi ban paaye.");
       }
       setSolved(data.papers);
+      setSolvedSource(data.source ?? "rules");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Solutions banate waqt dikkat aa gayi.");
     } finally {
@@ -581,29 +602,36 @@ function PaperSolutions({
   };
 
   const getMockTest = async (): Promise<string> => {
-    const response = await fetch("/api/mocktest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subject,
-        questions: realQuestions,
-        topics: plan.topics ?? [],
-      }),
+    const data: MockTestResponse = await buildMockTest({
+      subject,
+      questions: realQuestions,
+      topics: (plan.topics ?? []).map((entry) => ({
+        id: entry.topic.id,
+        title: entry.topic.title,
+        chapter: entry.topic.chapter,
+        keywords: entry.topic.keywords,
+        description: entry.topic.description,
+        importance: entry.topic.importance,
+        difficulty: entry.topic.difficulty,
+        pastQuestions: entry.signal.questions.slice(0, 4).map((q) => ({
+          text: q.text,
+          year: q.paperYear,
+          label: q.paperLabel,
+          marks: q.marks,
+        })),
+      })),
     });
-    const data: {
-      ok: boolean;
-      markdown?: string;
-      structure?: { sections: number; totalMarks: number; years: string };
-      error?: string;
-    } = await response.json();
     if (!data.ok || !data.markdown) throw new Error(data.error || "Mock test nahi ban paaya.");
 
+    setMockSource(data.source ?? "rules");
     // Echo what was actually measured in their papers, so "same pattern" is
     // a checkable claim rather than a promise.
     if (data.structure) {
       setMockNote(
         `Tumhare papers se nikaala gaya pattern: ${data.structure.sections} sections · ${data.structure.totalMarks} marks · ${data.structure.years}`,
       );
+    } else {
+      setMockNote(null);
     }
     return data.markdown;
   };
@@ -614,7 +642,7 @@ function PaperSolutions({
         <div>
           <h3 className="text-sm font-extrabold">📖 Solved paper — har sawaal ka jawab uske neeche</h3>
           <p className="mt-0.5 text-[0.72rem] leading-relaxed text-[var(--muted)]">
-            Pehle apne purane papers ke saare sawaal, unke neeche model answer aur har sawaal par
+            Pehle apne purane papers ke saare sawaal, unke neeche jawab aur har sawaal par
             Easy/Medium/Hard + Important tag. Padh ke hi pata chal jayega kya aata hai.
           </p>
         </div>
@@ -735,6 +763,22 @@ function PaperSolutions({
           );
         })}
 
+      {/* Who actually wrote these answers — never left unstated. */}
+      {solved && solvedSource && (
+        <p
+          className="text-[0.68rem] text-[var(--muted)]"
+          title={
+            solvedSource === "ai"
+              ? "Written by the model running locally in this browser"
+              : "An answer framework built from your syllabus — not a verified textbook answer"
+          }
+        >
+          {solvedSource === "ai"
+            ? "🧠 Jawab browser AI model ne likhe — apne textbook se match zaroor karna."
+            : "📄 Jawab rule engine ne banaye — ye framework hai, verified model answer nahi."}
+        </p>
+      )}
+
       {/* Answer key + a paper with the same shape as the real thing */}
       <DocPanel
         title="🧪 Mock test — in papers jaisa exact pattern"
@@ -748,6 +792,22 @@ function PaperSolutions({
                 plan.topics.filter((t) => t.signal.trend === "important").length
               } important se sawaal honge.`
             : null)
+        }
+        extra={
+          mockSource ? (
+            <p
+              className="text-[0.68rem] text-[var(--muted)]"
+              title={
+                mockSource === "ai"
+                  ? "Questions written by the model running locally in this browser"
+                  : "Questions assembled from your own syllabus lines and real past questions"
+              }
+            >
+              {mockSource === "ai"
+                ? "🧠 Sawaal browser AI model ne likhe — ye asli past-paper sawaal nahi hain."
+                : "📄 Sawaal rule engine ne banaye — aapke syllabus aur PYQs se, asli past paper nahi."}
+            </p>
+          ) : null
         }
         onGenerate={getMockTest}
       />

@@ -94,8 +94,8 @@ export function SyllabusForm(props: SyllabusFormProps) {
         <div>
           <h2 className="text-lg font-extrabold">1 · Syllabus daalo</h2>
           <p className="text-sm text-[var(--muted)]">
-            Chapters, unit list, topic names — kuch bhi chalega. AI padh ke har unit ke alag
-            study topics bana dega.
+            Chapters, unit list, topic names — kuch bhi chalega. Browser AI (ya rule engine) har
+            unit ke alag study topics bana dega.
           </p>
         </div>
         <button type="button" onClick={onLoadSample} className="btn-ghost px-3 py-1.5 text-sm">
@@ -136,7 +136,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
         <Group
           icon="🎥"
           label="Video settings"
-          hint="kis language ki videos chahiye aur kitni per topic"
+          hint="kis language ke search links chahiye aur kitni per topic"
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
@@ -158,7 +158,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
 
             <label className="block">
               <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
-                <PlayIcon width={16} height={16} /> Videos per topic
+                <PlayIcon width={16} height={16} /> Links per topic
               </span>
               <select
                 value={perTopic}
@@ -167,7 +167,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
               >
                 {[2, 3, 4].map((n) => (
                   <option key={n} value={n}>
-                    {n} best video{n > 1 ? "s" : ""}
+                    {n} search link{n > 1 ? "s" : ""}
                   </option>
                 ))}
               </select>
@@ -233,7 +233,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
         )}
 
         <span className="text-xs text-[var(--muted)]">
-          AI topics nikalta hai → phir PYQ importance → uske baad videos
+          Topics nikalte hain → phir PYQ importance → uske baad search links
         </span>
       </div>
     </section>

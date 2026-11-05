@@ -8,46 +8,33 @@ import {
   CopyIcon,
   DownloadIcon,
   GraduationIcon,
-  KeyIcon,
   ListIcon,
   RefreshIcon,
 } from "@/components/Icons";
+import { AiStatusChip } from "@/components/AiStatusChip";
 import { ChatWidget } from "@/components/ChatWidget";
 import { CoverageReport } from "@/components/CoverageReport";
 import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
 import { FullNotesPanel } from "@/components/FullNotesPanel";
-import { PlaylistBanner } from "@/components/PlaylistBanner";
-import { SetupBanner } from "@/components/SetupBanner";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
-import { KeysModal } from "@/components/KeysModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { TodoPanel } from "@/components/TodoPanel";
 import { TopicPanel } from "@/components/TopicPanel";
 import { TopicSidebar } from "@/components/TopicSidebar";
-import { VideoPlayerModal, type PlayerVideo } from "@/components/VideoPlayerModal";
 import { useStudiedTopics } from "@/hooks/useStudiedTopics";
-import {
-  buildCsv,
-  buildMarkdown,
-  copyText,
-  downloadFile,
-} from "@/lib/exporters";
-import { videoUrl } from "@/lib/format";
-import { coverageMap } from "@/lib/playlists";
+import { primeBrowserAi } from "@/lib/ai/run";
+import { analyzeSyllabus, buildPlan, topicSearches } from "@/lib/engine";
+import { buildCsv, buildMarkdown, copyText, downloadFile } from "@/lib/exporters";
 import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
 import type {
   AnalyzeResponse,
-  CoursePlaylist,
   ExamPlanResponse,
   ExamTopic,
-  HealthResponse,
   PlanResponse,
-  PlaylistResponse,
   PyqQuestion,
   Topic,
   TopicResult,
-  VideosResponse,
 } from "@/lib/types";
 
 type Phase = "idle" | "analyzing" | "papers" | "matching" | "done";
@@ -61,24 +48,21 @@ interface PlanState {
 
 export default function Home() {
   /* ------------------------------- setup ------------------------------- */
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [keysOpen, setKeysOpen] = useState(false);
-  const refreshHealth = useCallback(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((data: HealthResponse) => setHealth(data))
-      .catch(() => setHealth(null));
-  }, []);
+  /**
+   * Start the optional browser model downloading as soon as the page opens.
+   * Nothing is required of it: the rule-based engine answers immediately
+   * either way, and the header chip reports whatever is actually happening.
+   */
   useEffect(() => {
-    refreshHealth();
-  }, [refreshHealth]);
+    primeBrowserAi();
+  }, []);
 
   /* -------------------------------- form -------------------------------- */
   const [syllabus, setSyllabus] = useState("");
   const [subject, setSubject] = useState("");
   const [language, setLanguage] = useState("hinglish");
-  // 2-4 videos per topic is plenty — the real job is covering the WHOLE
-  // syllabus, so quota goes to breadth (every topic) not depth (many videos
+  // 2-4 search links per topic is plenty — the real job is covering the WHOLE
+  // syllabus, so quota goes to breadth (every topic) not depth (many links
   // on the same topic).
   const [perTopic, setPerTopic] = useState(3);
 
@@ -90,10 +74,6 @@ export default function Home() {
   const [formError, setFormError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [player, setPlayer] = useState<PlayerVideo | null>(null);
-  /** The verified full-course playlist covering the biggest share of syllabus. */
-  const [playlist, setPlaylist] = useState<CoursePlaylist | null>(null);
-  const [playlistLoading, setPlaylistLoading] = useState(false);
   /** Exam Mode output — priority plan built from the student's real papers.
    *  Held in the page so a re-analysis does not wipe uploaded papers. */
   const [exam, setExamState] = useState<ExamState>(EMPTY_EXAM_STATE);
@@ -114,10 +94,10 @@ export default function Home() {
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Video search starts exactly once per analysis — after the PYQ step or
-   *  when it is skipped. A slider-driven plan rebuild must not re-search. */
+  /** Search links are built exactly once per analysis — after the PYQ step or
+   *  when it is skipped. A slider-driven plan rebuild must not rebuild them. */
   const searchStartedRef = useRef(false);
-  /** Topic-order signature of the last plan the videos were matched against. */
+  /** Topic-order signature of the last plan the links were built against. */
   const matchedPlanRef = useRef("");
 
   const studiedApi = useStudiedTopics();
@@ -138,21 +118,11 @@ export default function Home() {
     [topics, isStudied],
   );
   const matchedTopics = useMemo(
-    () => topics.filter((t) => (results[t.id]?.videos?.length ?? 0) > 0).length,
+    () => topics.filter((t) => (results[t.id]?.searches?.length ?? 0) > 0).length,
     [topics, results],
   );
-  /**
-   * Honest syllabus coverage: a topic only counts as covered when it has a
-   * video we would actually recommend (top score >= 55). A panel where search
-   * technically returned something weak is not real coverage.
-   */
-  const coveragePercent = useMemo(() => {
-    if (topics.length === 0) return 0;
-    const covered = topics.filter((t) => (results[t.id]?.videos?.[0]?.score ?? 0) >= 55).length;
-    return Math.round((covered / topics.length) * 100);
-  }, [topics, results]);
   const videoCount = useMemo(
-    () => Object.values(results).reduce((sum, r) => sum + r.videos.length, 0),
+    () => Object.values(results).reduce((sum, r) => sum + r.searches.length, 0),
     [results],
   );
   const allStudied = topics.length > 0 && studiedCount === topics.length;
@@ -206,10 +176,10 @@ export default function Home() {
    * topicId -> the real past questions that belong to it.
    *
    * These come from the PLAN, not from `exam.questions`: the question-to-topic
-   * mapping happens server-side inside /api/examplan, and the plan's
-   * `signal.questions` are the only client-side copy carrying `topicId`.
-   * Reading `exam.questions` here would silently produce an empty map and the
-   * PYQ practice panel would never render.
+   * mapping happens inside `buildExamPlan`, and the plan's `signal.questions`
+   * are the only client-side copy carrying `topicId`. Reading `exam.questions`
+   * here would silently produce an empty map and the PYQ practice panel would
+   * never render.
    */
   const pyqByTopic = useMemo(() => {
     const map = new Map<string, PyqQuestion[]>();
@@ -220,7 +190,22 @@ export default function Home() {
     return map;
   }, [exam.plan]);
 
+  /**
+   * How many syllabus topics your real papers actually asked about.
+   *
+   * This is counted, not estimated — it is the honest replacement for the old
+   * "syllabus covered" score, which used to be a video-match number.
+   */
+  const pyqCovered = useMemo(() => pyqByTopic.size, [pyqByTopic]);
+
   /* ------------------------------ matching ------------------------------ */
+  /**
+   * Builds the per-topic YouTube search links.
+   *
+   * There is no YouTube call here and no ranking: every entry is a URL to
+   * YouTube's own results page, built from the topic's own syllabus wording.
+   * What the student sees after clicking is whatever YouTube actually returns.
+   */
   const runMatching = useCallback(
     async (
       list: Topic[],
@@ -229,151 +214,59 @@ export default function Home() {
       lang: string,
       picks: number,
       skipStudied: boolean,
-      /** topicId -> playlist video id that teaches it (syllabus continuity). */
-      course: Record<string, string> = {},
     ) => {
-      let cursor = 0;
+      for (const topic of list) {
+        if (signal.aborted) return;
 
-      const worker = async () => {
-        while (cursor < list.length) {
-          const index = cursor++;
-          const topic = list[index];
-
-          // Topics the student already knows are not worth API quota.
-          if (skipStudied && isStudied(topic.title)) {
-            setResults((prev) => ({
-              ...prev,
-              [topic.id]: {
-                topic,
-                videos: [],
-                candidatesConsidered: 0,
-                queries: [],
-                skipped: true,
-              },
-            }));
-            continue;
-          }
-
-          try {
-            const response = await fetch("/api/videos", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                topic,
-                language: lang,
-                subject: courseName,
-                limit: picks,
-                courseVideoId: course[topic.id],
-                examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
-                topicCount: list.length,
-              }),
-              signal,
-            });
-            const data: VideosResponse = await response.json();
-            if (!data.ok || !data.result) {
-              throw new Error(data.error || "Video search failed.");
-            }
-            setResults((prev) => ({ ...prev, [topic.id]: data.result as TopicResult }));
-          } catch (err) {
-            if (signal.aborted) return;
-            setResults((prev) => ({
-              ...prev,
-              [topic.id]: {
-                topic,
-                videos: [],
-                candidatesConsidered: 0,
-                queries: [],
-                error: err instanceof Error ? err.message : "Video search failed.",
-              },
-            }));
-          }
+        // Topics the student already knows do not need a study direction.
+        if (skipStudied && isStudied(topic.title)) {
+          setResults((prev) => ({
+            ...prev,
+            [topic.id]: {
+              topic,
+              searches: [],
+              queries: [],
+              skipped: true,
+            },
+          }));
+          continue;
         }
-      };
 
-      await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
+        try {
+          const result = topicSearches({
+            topic,
+            subject: courseName,
+            language: lang,
+            limit: picks,
+            examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
+          });
+          setResults((prev) => ({ ...prev, [topic.id]: result }));
+        } catch (err) {
+          setResults((prev) => ({
+            ...prev,
+            [topic.id]: {
+              topic,
+              searches: [],
+              queries: [],
+              error: err instanceof Error ? err.message : "Search links could not be built.",
+            },
+          }));
+        }
+
+        // Yield a frame so the panels fill in progressively instead of all at once.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
       if (!signal.aborted) setPhase("done");
     },
     // pyqByTopic feeds exam-worded queries — a new plan must re-create this.
     [isStudied, pyqByTopic],
   );
 
-  /* ------------------------------ playlist ------------------------------- */
   /**
-   * Looks for an EXISTING full-course playlist that already teaches this
-   * syllabus. This runs BEFORE per-topic matching on purpose: once we know the
-   * playlist, every single topic gets its continuity pick from the first video
-   * onwards, instead of half the list being re-done later. A miss is a normal
-   * outcome, not an error — matching just falls back to pure per-topic search.
-   */
-  const lookupPlaylist = useCallback(
-    async (
-      list: Topic[],
-      courseName: string,
-      lang: string,
-      syllabusText: string,
-    ): Promise<CoursePlaylist | null> => {
-      if (list.length === 0) return null;
-      setPlaylistLoading(true);
-      try {
-        const response = await fetch("/api/playlists", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            topics: list.map((t) => ({
-              id: t.id,
-              title: t.title,
-              description: t.description,
-              keywords: t.keywords,
-            })),
-            subject: courseName,
-            language: lang,
-            syllabus: syllabusText,
-          }),
-        });
-        const data: PlaylistResponse = await response.json();
-        if (data.ok && data.playlist) {
-          setPlaylist(data.playlist);
-          notify(
-            `📘 Playlist mili — ${data.playlist.coveragePercent}% syllabus cover kar rahi hai.`,
-          );
-          return data.playlist;
-        }
-        return null;
-      } catch {
-        /* playlist lookup is a bonus — never block the student on it */
-        return null;
-      } finally {
-        setPlaylistLoading(false);
-      }
-    },
-    [notify],
-  );
-
-  /**
-   * Kicks off per-topic matching. When `wanted` is null the playlist is looked
-   * up FIRST, so matching can use it from the very first topic rather than
-   * half-way through.
-   */
-  const startMatching = useCallback(
-    async (
-      list: Topic[],
-      courseName: string,
-      signal: AbortSignal,
-      lang: string,
-      picks: number,
-      syllabusText: string,
-      wanted: CoursePlaylist | null,
-    ) => {
-      const chosen = wanted ?? (await lookupPlaylist(list, courseName, lang, syllabusText));
-      await runMatching(list, courseName, signal, lang, picks, true, coverageMap(chosen));
-    },
-    [lookupPlaylist, runMatching],
-  );
-
-  /**
-   * Step 3 — the video search, started exactly ONCE per analysis: either
-   * right after the PYQ plan lands (queries then use the exam's own wording
-   * and the order follows importance) or immediately when papers are skipped.
+   * Step 3 — the search links, built exactly ONCE per analysis: either right
+   * after the PYQ plan lands (queries then use the exam's own wording) or
+   * immediately when papers are skipped.
    */
   const beginVideoSearch = useCallback(async () => {
     if (searchStartedRef.current || topics.length === 0) return;
@@ -385,13 +278,13 @@ export default function Home() {
 
     setPhase("matching");
     setFormError(null);
-    await startMatching(topics, subjectName, controller.signal, language, perTopic, syllabus, null);
-  }, [topics, subjectName, language, perTopic, syllabus, startMatching]);
+    await runMatching(topics, subjectName, controller.signal, language, perTopic, true);
+  }, [topics, subjectName, language, perTopic, runMatching]);
 
-  /** Step 2 skipped — go straight to videos, importance taken from syllabus. */
+  /** Step 2 skipped — go straight to links, importance taken from syllabus. */
   const skipPapers = useCallback(() => {
     setPyqSkipped(true);
-    notify("Theek hai — syllabus importance se videos dhoondh raha hoon.");
+    notify("Theek hai — syllabus importance se search links bana raha hoon.");
     void beginVideoSearch();
   }, [beginVideoSearch, notify]);
 
@@ -414,20 +307,15 @@ export default function Home() {
     setResults({});
     setTopics([]);
     setActiveId(null);
-    setPlaylist(null);
     // Keep the uploaded PAPERS (re-OCR is expensive) but drop derived state —
     // new topics mean the plan and the topic mapping must be rebuilt.
     setExam({ questions: [], parsedPapers: [], plan: null });
     setPhase("analyzing");
 
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syllabus, subject }),
-        signal: controller.signal,
-      });
-      const data: AnalyzeResponse = await response.json();
+      // Runs in this browser: rule-based parser first, the optional model
+      // only when it has genuinely loaded. No key, no network call.
+      const data: AnalyzeResponse = await analyzeSyllabus({ syllabus, subject });
 
       if (!data.ok || !data.topics?.length) {
         throw new Error(data.error || "Could not extract topics from this syllabus.");
@@ -439,8 +327,13 @@ export default function Home() {
       if (data.truncated) {
         notify("Syllabus was large — showing the top topics first.");
       }
-      // Step 1 done — topics are on the board. Videos deliberately WAIT for
-      // the PYQ step so their order follows real exam importance, not guesses.
+      notify(
+        data.source === "ai"
+          ? "🧠 Browser AI model ne syllabus split kiya."
+          : "📄 Syllabus split by the rule-based engine (browser AI optional).",
+      );
+      // Step 1 done — topics are on the board. Search links deliberately WAIT
+      // for the PYQ step so their order follows real exam importance, not guesses.
       searchStartedRef.current = false;
       matchedPlanRef.current = "";
       setPyqSkipped(false);
@@ -452,9 +345,9 @@ export default function Home() {
     }
   }, [syllabus, subject, setExam, notify]);
 
-  /** Fetches videos for a single topic (used when a topic is un-ticked). */
+  /** Builds search links for a single topic (used when a topic is un-ticked). */
   const matchTopic = useCallback(
-    async (topic: Topic) => {
+    (topic: Topic) => {
       setResults((prev) => {
         const next = { ...prev };
         delete next[topic.id];
@@ -462,39 +355,30 @@ export default function Home() {
       });
 
       try {
-        const response = await fetch("/api/videos", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            topic,
-            language,
-            subject: subjectName,
-            limit: perTopic,
-            courseVideoId: coverageMap(playlist)[topic.id],
-            examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
-            topicCount: topics.length,
-          }),
+        const result = topicSearches({
+          topic,
+          subject: subjectName,
+          language,
+          limit: perTopic,
+          examQuestions: pyqByTopic.get(topic.id)?.map((q) => q.text) ?? [],
         });
-        const data: VideosResponse = await response.json();
-        if (!data.ok || !data.result) throw new Error(data.error || "Video search failed.");
-        setResults((prev) => ({ ...prev, [topic.id]: data.result as TopicResult }));
+        setResults((prev) => ({ ...prev, [topic.id]: result }));
       } catch (err) {
         setResults((prev) => ({
           ...prev,
           [topic.id]: {
             topic,
-            videos: [],
-            candidatesConsidered: 0,
+            searches: [],
             queries: [],
-            error: err instanceof Error ? err.message : "Video search failed.",
+            error: err instanceof Error ? err.message : "Search links could not be built.",
           },
         }));
       }
     },
-    [language, subjectName, perTopic, playlist, pyqByTopic, topics],
+    [language, subjectName, perTopic, pyqByTopic],
   );
 
-  /** Tick/untick a topic. Unticking a skipped topic re-searches its videos. */
+  /** Tick/untick a topic. Unticking a skipped topic rebuilds its links. */
   const handleToggleStudied = useCallback(
     (title: string) => {
       const nowStudied = !isStudied(title);
@@ -510,7 +394,7 @@ export default function Home() {
     [isStudied, toggleStudied, topics, results, matchTopic],
   );
 
-  /** Re-runs only the video search, keeping the extracted topics intact. */
+  /** Re-builds only the search links, keeping the extracted topics intact. */
   const rematchVideos = useCallback(async () => {
     if (topics.length === 0) return;
     searchStartedRef.current = true;
@@ -521,26 +405,17 @@ export default function Home() {
     setResults({});
     setPhase("matching");
     setFormError(null);
-    // Re-use the playlist we already verified, so the coverage promise holds.
-    await startMatching(
-      topics,
-      subjectName,
-      controller.signal,
-      language,
-      perTopic,
-      syllabus,
-      playlist,
-    );
-    notify("Videos re-matched with your current settings.");
-  }, [topics, subjectName, language, perTopic, syllabus, playlist, startMatching, notify]);
+    await runMatching(topics, subjectName, controller.signal, language, perTopic, true);
+    notify("Search links rebuilt with your current settings.");
+  }, [topics, subjectName, language, perTopic, runMatching, notify]);
 
   /**
-   * Step 2 finished — the PYQ plan exists, so videos can finally start,
-   * in the plan's order (must-do first) and with the exam's own wording.
+   * Step 2 finished — the PYQ plan exists, so the search links can finally be
+   * built, in the plan's order (must-do first) and with the exam's own wording.
    *
    * Guarded by a signature of the plan's topic order rather than plan object
    * identity: changing the time budget rebuilds the plan, and a slider nudge
-   * must not trigger a full re-search of every topic.
+   * must not rebuild every link.
    */
   const handlePlanBuilt = useCallback(
     (plan: ExamPlanResponse) => {
@@ -552,11 +427,11 @@ export default function Home() {
       if (matchedPlanRef.current === signature) return;
       matchedPlanRef.current = signature;
 
-      // Papers came AFTER a skip (videos already matched on syllabus alone):
-      // re-run once with the exam's wording. Otherwise this plan is what
-      // STARTS the search.
+      // Papers came AFTER a skip (links already built on syllabus alone):
+      // re-build once with the exam's wording. Otherwise this plan is what
+      // STARTS the build.
       if (searchStartedRef.current) {
-        notify("🔁 Ab videos dobara PYQ ki language me dhoondh rahi hoon.");
+        notify("🔁 Ab links dobara PYQ ki language me bana rahi hoon.");
         void rematchVideos();
       } else {
         void beginVideoSearch();
@@ -581,7 +456,6 @@ export default function Home() {
     setTopics([]);
     setResults({});
     setSubjectName("");
-    setPlaylist(null);
     setExamState(EMPTY_EXAM_STATE);
     setPyqSkipped(false);
     setPhase("idle");
@@ -617,27 +491,25 @@ export default function Home() {
   }, []);
 
   /* ------------------------------- exports ------------------------------- */
-  const hasVideos = videoCount > 0;
+  const hasLinks = videoCount > 0;
 
   const handleCopy = useCallback(async () => {
-    const ok = await copyText(
-      buildMarkdown(subjectName, topics, results, isStudied, playlist),
-    );
+    const ok = await copyText(buildMarkdown(subjectName, topics, results, isStudied));
     notify(ok ? "Study list copied to clipboard ✅" : "Could not copy — try the download button.");
-  }, [subjectName, topics, results, isStudied, playlist, notify]);
+  }, [subjectName, topics, results, isStudied, notify]);
 
   const handleDownloadMd = useCallback(() => {
     downloadFile(
-      `${slugify(subjectName || "syllabus")}-best-videos.md`,
-      buildMarkdown(subjectName, topics, results, isStudied, playlist),
+      `${slugify(subjectName || "syllabus")}-study-list.md`,
+      buildMarkdown(subjectName, topics, results, isStudied),
       "text/markdown;charset=utf-8",
     );
     notify("Markdown file downloaded.");
-  }, [subjectName, topics, results, isStudied, playlist, notify]);
+  }, [subjectName, topics, results, isStudied, notify]);
 
   const handleDownloadCsv = useCallback(() => {
     downloadFile(
-      `${slugify(subjectName || "syllabus")}-videos.csv`,
+      `${slugify(subjectName || "syllabus")}-study-list.csv`,
       buildCsv(topics, results, isStudied),
       "text/csv;charset=utf-8",
     );
@@ -647,48 +519,38 @@ export default function Home() {
   /* ------------------------------ study plan ----------------------------- */
   const generatePlan = useCallback(async () => {
     const planTopics = topics.filter((t) => !isStudied(t.title));
-    const picks = planTopics
-      .map((t) => {
-        const video = results[t.id]?.videos?.[0];
-        return video
-          ? {
-              title: t.title,
-              videoTitle: video.video.title,
-              videoUrl: videoUrl(video.video.id),
-              seconds: video.video.durationSeconds,
-            }
-          : null;
-      })
-      .filter((p): p is NonNullable<typeof p> => p !== null);
 
-    if (picks.length === 0) {
+    if (planTopics.length === 0) {
       notify(
         studiedCount > 0
           ? "Sab topics already studied — plan ki zaroorat nahi! 🎉"
-          : "Pehle kuch videos match karwa, phir plan banega.",
+          : "Pehle syllabus analyse karo, phir plan banega.",
       );
       return;
     }
+
+    // Each day's video entry is the topic's own YouTube search link — the
+    // plan never claims a specific video was watched or recommended.
+    const picks = planTopics.map((t) => {
+      const search = results[t.id]?.searches?.[0];
+      return {
+        title: t.title,
+        minutes: t.estimatedMinutes,
+        importance: t.importance,
+        videoTitle: search ? `YouTube search: ${search.query}` : undefined,
+        videoUrl: search?.url,
+      };
+    });
 
     setPlan({ open: true, loading: true, plan: null, error: null });
     const totalDays = Math.max(3, Math.min(30, Math.ceil(picks.length * 0.8)));
 
     try {
-      const response = await fetch("/api/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subject: subjectName || "Your course",
-          topics: planTopics.map((t) => ({
-            title: t.title,
-            minutes: t.estimatedMinutes,
-            importance: t.importance,
-          })),
-          picks,
-          totalDays,
-        }),
+      const data: PlanResponse = await buildPlan({
+        subject: subjectName || "Your course",
+        picks,
+        totalDays,
       });
-      const data: PlanResponse = await response.json();
       if (!data.ok || !data.days) throw new Error(data.error || "Could not build the study plan.");
       setPlan({ open: true, loading: false, plan: data, error: null });
     } catch (err) {
@@ -723,43 +585,19 @@ export default function Home() {
             <div>
               <p className="text-[0.95rem] font-extrabold leading-none">ExamSmasher</p>
               <p className="mt-0.5 text-[0.68rem] text-[var(--muted)]">
-                Past papers → exam priority → notes, PYQs & videos
+                Past papers → exam priority → notes, PYQs & search links
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {health && (
-              <span className="chip hidden sm:inline-flex">
-                {health.llm ? `AI: ${health.llm}` : "AI key missing"}
-                {health.youtube ? " · YouTube ✓" : " · YouTube ✗"}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => setKeysOpen(true)}
-              className="btn-ghost flex items-center gap-1.5 px-2.5 py-1.5 text-xs"
-              style={
-                health && (!health.llm || !health.youtube)
-                  ? {
-                      borderColor: "color-mix(in srgb, var(--warn) 55%, var(--line))",
-                      color: "var(--warn)",
-                    }
-                  : undefined
-              }
-              title="Add or change API keys"
-            >
-              <KeyIcon width={14} height={14} />
-              <span className="hidden sm:inline">API Keys</span>
-            </button>
+            <AiStatusChip />
             <ThemeToggle />
           </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-20 pt-8 sm:px-6">
-        {health && <SetupBanner health={health} onOpenKeys={() => setKeysOpen(true)} />}
-
         <StepsBar current={step} />
 
         {/* Hero — only before the first analysis */}
@@ -773,7 +611,7 @@ export default function Home() {
               daalo (optional hai), aur app khud batayega — kaunsa topic{" "}
               <strong className="text-[var(--text)]">Must</strong> hai, kaunsa{" "}
               <strong className="text-[var(--text)]">Can skip</strong> — aur usi order me har topic
-              ke best videos, notes aur solved PYQs de dega. Bas tu padh.
+              ke YouTube search links, notes aur solved PYQs de dega. Bas tu padh.
             </p>
 
             <div className="mx-auto mt-7 grid max-w-4xl gap-3 sm:grid-cols-3">
@@ -781,7 +619,7 @@ export default function Home() {
                 {
                   icon: <span className="text-lg">📝</span>,
                   title: "1 · Syllabus daalo",
-                  body: "Apna syllabus paste karo — AI use padh ke har unit ke alag study topics banayega.",
+                  body: "Apna syllabus paste karo — browser AI ya rule engine har unit ke alag study topics banayega.",
                 },
                 {
                   icon: <span className="text-lg">🎯</span>,
@@ -790,8 +628,8 @@ export default function Home() {
                 },
                 {
                   icon: <span className="text-lg">📚</span>,
-                  title: "3 · Videos, notes, jawab",
-                  body: "Har topic ke best videos (important pehle), poore syllabus ke notes, aur har PYQ sawaal ka jawab uske neeche hi.",
+                  title: "3 · Links, notes, jawab",
+                  body: "Har topic ke YouTube search links (important pehle), poore syllabus ke notes, aur har PYQ sawaal ka jawab uske neeche hi.",
                 },
               ].map((feature) => (
                 <div key={feature.title} className="card p-4 text-left">
@@ -847,6 +685,7 @@ export default function Home() {
               <ExamMode
                 topics={topics}
                 subject={subjectName}
+                syllabus={syllabus}
                 exam={exam}
                 setExam={setExam}
                 onPlanBuilt={handlePlanBuilt}
@@ -857,14 +696,14 @@ export default function Home() {
                 <div className="card mt-3 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                   <p className="text-xs leading-relaxed text-[var(--muted)]">
                     Purane papers nahi hain? Koi baat nahi — importance syllabus se nikaal ke
-                    videos dhoondh deta hoon.
+                    search links bana deta hoon.
                   </p>
                   <button
                     type="button"
                     onClick={skipPapers}
                     className="btn-primary shrink-0 px-4 py-2 text-xs"
                   >
-                    Skip karo → seedha videos dhoondho →
+                    Skip karo → seedha search links banao →
                   </button>
                 </div>
               )}
@@ -882,8 +721,8 @@ export default function Home() {
               <section className="mt-8">
                 <StepHeading
                   n={3}
-                  title="Videos, notes & practice"
-                  subtitle="Must-do topics pehle — har topic ke best videos, poore syllabus ke notes aur PYQ practice, sab isi page par."
+                  title="Links, notes & practice"
+                  subtitle="Must-do topics pehle — har topic ke YouTube search links, poore syllabus ke notes aur PYQ practice, sab isi page par."
                   done={phase === "done"}
                 />
 
@@ -892,11 +731,11 @@ export default function Home() {
                     <Stat label="Topics" value={String(topics.length)} />
                     <Stat label="Must-do" value={String(mustCount)} accent />
                     <Stat
-                      label="Syllabus covered"
-                      value={`${coveragePercent}%`}
+                      label="Topics with real PYQs"
+                      value={exam.plan ? `${pyqCovered}/${topics.length}` : "—"}
                       accent
                     />
-                    <Stat label="Videos" value={String(videoCount)} />
+                    <Stat label="Search links" value={String(videoCount)} />
                     {exam.papers.length > 0 && (
                       <Stat label="Past papers" value={String(exam.papers.length)} accent />
                     )}
@@ -921,7 +760,7 @@ export default function Home() {
                       onClick={rematchVideos}
                       disabled={phase === "matching"}
                       className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
-                      title="Search videos again (studied topics are skipped)"
+                      title="Rebuild the search links (studied topics are skipped)"
                     >
                       <RefreshIcon width={14} height={14} /> Re-match
                     </button>
@@ -944,19 +783,19 @@ export default function Home() {
                             label: "Copy list",
                             icon: <CopyIcon width={13} height={13} />,
                             onClick: handleCopy,
-                            disabled: !hasVideos,
+                            disabled: !hasLinks,
                           },
                           {
                             label: "Markdown (.md)",
                             icon: <DownloadIcon width={13} height={13} />,
                             onClick: handleDownloadMd,
-                            disabled: !hasVideos,
+                            disabled: !hasLinks,
                           },
                           {
                             label: "CSV",
                             icon: <DownloadIcon width={13} height={13} />,
                             onClick: handleDownloadCsv,
-                            disabled: !hasVideos,
+                            disabled: !hasLinks,
                           },
                           ...(studiedCount > 0
                             ? [
@@ -988,7 +827,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={generatePlan}
-                      disabled={phase === "matching" || !hasVideos}
+                      disabled={phase === "matching" || topics.length === 0}
                       className="btn-primary flex items-center gap-1.5 px-3.5 py-2 text-xs"
                     >
                       <CalendarIcon width={14} height={14} /> Study plan
@@ -997,37 +836,7 @@ export default function Home() {
                 </div>
 
                 {/* Whole syllabus as one long document — read it like a textbook */}
-                <FullNotesPanel syllabus={syllabus} subject={subjectName} />
-
-                {/* Verified full-course playlist — the "one playlist, whole syllabus" answer */}
-                {playlistLoading && !playlist && (
-                  <div className="card mt-4 flex items-center gap-3 px-4 py-3 text-xs text-[var(--muted)]">
-                    <span className="skeleton h-4 w-4 shrink-0 rounded-full" />
-                    Existing full-course playlist dhoond raha hoon, taaki poora syllabus ek hi
-                    jagah cover ho sake…
-                  </div>
-                )}
-
-                {playlist && (
-                  <PlaylistBanner
-                    playlist={playlist}
-                    totalTopics={topics.length}
-                    matching={phase === "matching"}
-                    onUse={() => {
-                      if (!playlist.coverage.length) return;
-                      void startMatching(
-                        topics,
-                        subjectName,
-                        new AbortController().signal,
-                        language,
-                        perTopic,
-                        syllabus,
-                        playlist,
-                      );
-                      notify("Playlist se videos dobara match ho rahe hain…");
-                    }}
-                  />
-                )}
+                <FullNotesPanel syllabus={syllabus} subject={subjectName} topics={topics} />
 
                 <div className="mt-6 grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
                   <TopicSidebar
@@ -1054,12 +863,10 @@ export default function Home() {
                         studied={isStudied(topic.title)}
                         subject={subjectName}
                         syllabus={syllabus}
-                        languageCode={language}
                         examEntry={examByTopic.get(topic.id)}
                         band={bandByTopic.get(topic.id) ?? "should"}
                         pyqQuestions={pyqByTopic.get(topic.id)}
                         onToggleStudied={() => handleToggleStudied(topic.title)}
-                        onPlay={setPlayer}
                       />
                     ))}
 
@@ -1077,7 +884,7 @@ export default function Home() {
                           <>
                             <p className="text-sm font-bold">
                               🎉 Analysis complete — {matchedTopics}/{topics.length} topics par
-                              videos mil gayi.
+                              search links ban gaye.
                             </p>
                             <p className="mt-1 text-xs text-[var(--muted)]">
                               {studiedCount > 0
@@ -1091,7 +898,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Honest gap list — named topics, their own PYQs, no silent empty panels */}
+                {/* Honest gap list — which topics your papers never asked about */}
                 {phase === "done" && (
                   <CoverageReport
                     topics={displayTopics}
@@ -1107,8 +914,8 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-[var(--line)] py-6 text-center text-xs text-[var(--muted)]">
-        ExamSmasher · trends from YOUR real papers · YouTube + Gemini · priority is computed from
-        actual questions, not guessed.
+        ExamSmasher · trends from YOUR real papers · runs in your browser with no API keys ·
+        priority is computed from actual questions, not guessed.
       </footer>
 
       <StudyPlanModal
@@ -1120,24 +927,13 @@ export default function Home() {
         onRegenerate={generatePlan}
       />
 
-      <VideoPlayerModal video={player} onClose={() => setPlayer(null)} />
-
       <TodoPanel open={todoOpen} onClose={() => setTodoOpen(false)} />
 
       <ChatWidget
         subject={subjectName}
         topics={topics}
         syllabus={syllabus.slice(0, 3000)}
-      />
-
-      <KeysModal
-        open={keysOpen}
-        health={health}
-        onClose={() => setKeysOpen(false)}
-        onSaved={() => {
-          refreshHealth();
-          notify("Keys save ho gayi ✅ — ab Analyse karke dekh!");
-        }}
+        pastQuestions={exam.plan?.topics?.flatMap((t) => t.signal.questions) ?? []}
       />
 
       {toast && (
@@ -1172,7 +968,7 @@ function StepsBar({ current }: { current: 1 | 2 | 3 }) {
   const steps = [
     { n: 1 as const, label: "Syllabus" },
     { n: 2 as const, label: "PYQ importance" },
-    { n: 3 as const, label: "Videos + notes" },
+    { n: 3 as const, label: "Links + notes" },
   ];
 
   return (

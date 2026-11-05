@@ -13,47 +13,39 @@ export interface Topic {
   chapter?: string;
 }
 
-/** Raw metadata for one YouTube video, straight from the Data API. */
-export interface VideoCandidate {
-  id: string;
-  title: string;
-  description: string;
-  channelTitle: string;
-  channelId: string;
-  publishedAt: string;
-  thumbnail: string;
-  durationSeconds: number;
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  hasCaptions: boolean;
-  embeddable: boolean;
-}
+/**
+ * Which engine produced a result.
+ *
+ * "ai"  — the in-browser model actually generated it.
+ * "rules" — deterministic, built from the student's own text.
+ *
+ * Every surface that shows generated material also shows this, so nothing is
+ * ever presented as model output when it was not.
+ */
+export type EngineSource = "ai" | "rules";
 
-/** A candidate after deterministic (non-AI) scoring. */
-export interface ScoredVideo {
-  video: VideoCandidate;
-  heuristicScore: number;
-  aiScore: number | null;
-  score: number;
-  relevance: number;
-  quality: number;
-  reasons: string[];
-  matchType: "transcript" | "metadata";
-  transcriptSnippet?: string;
-  aiSummary?: string;
-  trustedChannel: boolean;
-  /** True when this exact video sits inside the recommended full-course playlist. */
-  inCoursePlaylist?: boolean;
-  rank: number;
+/**
+ * One honest YouTube search suggestion.
+ *
+ * No video metadata is fetched or invented — this is just a link to
+ * YouTube's own results page for a query we built from the syllabus. What the
+ * student sees after clicking is whatever YouTube actually returns.
+ */
+export interface VideoSearch {
+  /** Short label, e.g. "Topic", "Unit", "Keywords". */
+  label: string;
+  /** The query string we built. */
+  query: string;
+  /** https://www.youtube.com/results?search_query=… */
+  url: string;
 }
 
 export interface TopicResult {
   topic: Topic;
-  videos: ScoredVideo[];
-  candidatesConsidered: number;
+  /** Search links for this topic — suggestions, never claimed matches. */
+  searches: VideoSearch[];
+  /** How the queries were built (e.g. ["topic", "unit", "keywords"]). */
   queries: string[];
-  aiUsed?: boolean;
   /** True when the topic was skipped because the student already studied it. */
   skipped?: boolean;
   error?: string;
@@ -64,24 +56,12 @@ export interface AnalyzeResponse {
   subject?: string;
   topics?: Topic[];
   truncated?: boolean;
-  provider?: string;
+  /** Which engine split the syllabus — shown in the UI, never guessed. */
+  source?: EngineSource;
   error?: string;
-}
-
-export interface VideosResponse {
-  ok: boolean;
-  result?: TopicResult;
-  error?: string;
-}
-
-export interface HealthResponse {
-  youtube: boolean;
-  llm: "gemini" | "openai" | null;
-  model: string | null;
 }
 
 /* --------------------------- three levels of notes --------------------------- */
-
 /** Level 1 — Detailed: proper explanations in paragraphs (concept clarity). */
 export interface DetailedSection {
   heading: string;
@@ -113,25 +93,12 @@ export interface NotesResponse {
   detailed?: DetailedSection[];
   notes?: NotesSection[];
   cards?: Flashcard[];
+  source?: EngineSource;
   error?: string;
 }
 
 /** Which language study material is written in — the student picks one. */
 export type NotesLang = "english" | "hinglish";
-
-/** AI summary of one video, based on its transcript when available. */
-export interface VideoSummary {
-  bullets: string[];
-  fit?: string;
-  level?: "beginner" | "intermediate" | "advanced";
-}
-
-export interface SummaryResponse {
-  ok: boolean;
-  summary?: VideoSummary;
-  transcriptAvailable?: boolean;
-  error?: string;
-}
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -141,6 +108,7 @@ export interface ChatMessage {
 export interface ChatResponse {
   ok: boolean;
   reply?: string;
+  source?: EngineSource;
   error?: string;
 }
 
@@ -164,53 +132,7 @@ export interface PlanResponse {
   days?: PlanDay[];
   tips?: string[];
   markdown?: string;
-  error?: string;
-}
-
-/* --------------------------- full-course playlists --------------------------- */
-
-/** One video sitting inside a playlist, in playlist order. */
-export interface PlaylistVideo {
-  videoId: string;
-  title: string;
-  position: number;
-}
-
-/** One topic mapped onto the playlist video that teaches it. */
-export interface PlaylistCoverage {
-  topicId: string;
-  videoId: string;
-  videoTitle: string;
-}
-
-/** A single "complete course" playlist, as found on YouTube. */
-export interface PlaylistCandidate {
-  id: string;
-  title: string;
-  channelTitle: string;
-  thumbnail: string;
-  /** Total videos YouTube reports for the playlist. */
-  videoCount: number;
-  url: string;
-}
-
-/** The chosen playlist plus how much of the student's syllabus it covers. */
-export interface CoursePlaylist extends PlaylistCandidate {
-  /** Videos we actually pulled from the playlist (capped). */
-  videos: PlaylistVideo[];
-  /** One entry per covered topic: topicId -> the playlist video that teaches it. */
-  coverage: PlaylistCoverage[];
-  /** 0-100 — share of the student's topics this playlist actually teaches. */
-  coveragePercent: number;
-  /** How the coverage was worked out. */
-  method: "ai" | "keyword";
-  /** Runner-up playlists so the student can switch if they dislike the pick. */
-  alternatives?: PlaylistCandidate[];
-}
-
-export interface PlaylistResponse {
-  ok: boolean;
-  playlist?: CoursePlaylist | null;
+  source?: EngineSource;
   error?: string;
 }
 
@@ -271,6 +193,46 @@ export interface SolvedPaper {
 export interface SolutionsResponse {
   ok: boolean;
   papers?: SolvedPaper[];
+  source?: EngineSource;
+  error?: string;
+}
+
+/* ------------------- engine responses that used to live in routes ------------------- */
+
+/** Questions read out of the uploaded previous-year papers. */
+export interface PapersResponse {
+  ok: boolean;
+  questions?: PyqQuestion[];
+  papers?: PyqPaper[];
+  dropped?: number;
+  source?: EngineSource;
+  error?: string;
+}
+
+/** A practice paper plus the pattern it was built from. */
+export interface MockTestResponse {
+  ok: boolean;
+  markdown?: string;
+  /** Structure actually detected — echoed back so the UI can state the match. */
+  structure?: { sections: number; totalMarks: number; years: string };
+  source?: EngineSource;
+  error?: string;
+}
+
+/** One model answer, written for a single real past question. */
+export interface AnswerResponse {
+  ok: boolean;
+  answer?: string;
+  source?: EngineSource;
+  error?: string;
+}
+
+/** Whole-syllabus notes as one continuous Markdown document. */
+export interface FullNotesResponse {
+  ok: boolean;
+  markdown?: string;
+  sections?: number;
+  source?: EngineSource;
   error?: string;
 }
 
@@ -310,6 +272,8 @@ export interface ExamPlanResponse {
   /** Honest note about what the analysis could and could not verify. */
   notes?: string[];
   totalMarks?: number;
+  /** Which engine mapped questions onto topics (the counts are always real). */
+  source?: EngineSource;
   error?: string;
 }
 
@@ -322,10 +286,12 @@ export interface QuizQuestion {
   answer: number;
   explanation: string;
   topicId?: string;
+  difficulty?: "easy" | "medium" | "hard";
 }
 
 export interface QuizResponse {
   ok: boolean;
   questions?: QuizQuestion[];
+  source?: EngineSource;
   error?: string;
 }

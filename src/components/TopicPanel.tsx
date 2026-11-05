@@ -1,13 +1,11 @@
 "use client";
 
-import type { PlayerVideo } from "@/components/VideoPlayerModal";
 import { CheckIcon } from "@/components/Icons";
 import { AlertIcon } from "@/components/Icons";
 import { BAND_LABEL, TREND_LABEL } from "@/lib/exam";
 import type { ExamTopic, PyqQuestion, Topic, TopicResult } from "@/lib/types";
 import { PyqPractice } from "./PyqPractice";
 import { TopicNotes } from "./TopicNotes";
-import { VideoCard } from "./VideoCard";
 
 const BAND_COLOR: Record<ExamTopic["band"], string> = {
   must: "var(--bad)",
@@ -20,11 +18,9 @@ interface TopicPanelProps {
   index: number;
   result?: TopicResult;
   studied: boolean;
-  /** Course name and syllabus excerpt for the AI notes generator. */
+  /** Course name and syllabus excerpt for the notes generator. */
   subject: string;
   syllabus: string;
-  /** Language code for transcript-based video summaries. */
-  languageCode: string;
   /** Set once Exam Mode has ranked this topic against the real papers. */
   examEntry?: ExamTopic;
   /** Must / Might / Can skip — from PYQ trend when available, else syllabus. */
@@ -32,7 +28,6 @@ interface TopicPanelProps {
   /** Real past questions that map to this topic. */
   pyqQuestions?: PyqQuestion[];
   onToggleStudied: () => void;
-  onPlay: (video: PlayerVideo) => void;
 }
 
 export function TopicPanel({
@@ -42,12 +37,10 @@ export function TopicPanel({
   studied,
   subject,
   syllabus,
-  languageCode,
   examEntry,
   band,
   pyqQuestions,
   onToggleStudied,
-  onPlay,
 }: TopicPanelProps) {
   return (
     <section
@@ -150,12 +143,18 @@ export function TopicPanel({
         {/* What the exam actually asks — shown first so the student knows what
             to watch FOR rather than watching passively. */}
         {pyqQuestions && pyqQuestions.length > 0 && (
-          <PyqPractice topic={topic} questions={pyqQuestions} subject={subject} />
+          <PyqPractice
+            topic={topic}
+            questions={pyqQuestions}
+            subject={subject}
+            syllabus={syllabus}
+            topics={[topic]}
+          />
         )}
 
         {result?.skipped && (
           <div className="rounded-xl border border-dashed border-[var(--line)] px-4 py-4 text-sm text-[var(--muted)]">
-            ✅ Tumne ye topic pehle padh liya hai — isliye video search skip kar di.
+            ✅ Tumne ye topic pehle padh liya hai — isliye search links skip kar di.
           </div>
         )}
 
@@ -174,39 +173,64 @@ export function TopicPanel({
               <span className="mt-0.5 shrink-0">
                 <AlertIcon width={15} height={15} />
               </span>
-              Could not search videos for this topic
+              Search links nahi ban paaye
             </p>
             <p className="mt-1 pl-6 text-xs text-[var(--muted)]">{result.error}</p>
           </div>
         )}
 
-        {result && !result.error && !result.skipped && result.videos.length === 0 && (
+        {result && !result.error && !result.skipped && result.searches.length === 0 && (
           <div className="rounded-xl border border-dashed border-[var(--line)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-            No confident match for this topic. Try re-running with a more specific topic name, or
-            pick a different video language.
+            Is topic ke liye koi search link nahi ban paaya — topic ka naam thoda specific karke
+            dobara analyse karo.
           </div>
         )}
 
-        {result?.videos.map((entry, i) => (
-          <VideoCard
-            key={entry.video.id}
-            entry={entry}
-            index={i}
-            topicTitle={topic.title}
-            languageCode={languageCode}
-            onPlay={onPlay}
-          />
-        ))}
-
-        {result && !result.error && !result.skipped && result.videos.length > 0 && (
-          <p className="pl-1 text-[0.72rem] text-[var(--muted)]">
-            {result.candidatesConsidered} candidates scanned
-            {result.aiUsed ? " · AI content-match applied" : " · ranked by match + quality signals"}
-            {result.queries.length > 0 && <> · “{result.queries[0]}”</>}
-          </p>
+        {result && !result.error && !result.skipped && result.searches.length > 0 && (
+          <div className="card p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-sm font-extrabold">🎬 YouTube search suggestions</p>
+              <span className="chip">{result.searches.length} links</span>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">
+              Ye YouTube ki apni results page par khulte hain —{" "}
+              <strong className="text-[var(--text)]">humne koi video rank ya verify nahi kiya</strong>.
+              Jo achha lage wahi chuno.
+            </p>
+            <ul className="mt-2.5 space-y-1.5">
+              {result.searches.map((search) => (
+                <li key={search.url}>
+                  <a
+                    href={search.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs transition-colors hover:bg-[var(--surface-2)]"
+                    style={{ borderColor: "var(--line)" }}
+                  >
+                    <span className="min-w-0 truncate font-semibold">
+                      <span
+                        className="mr-1.5 rounded px-1.5 py-0.5 text-[0.62rem] font-extrabold uppercase tracking-wide"
+                        style={{
+                          background: "color-mix(in srgb, var(--brand) 12%, transparent)",
+                          color: "var(--brand)",
+                        }}
+                      >
+                        {search.label}
+                      </span>
+                      {search.query}
+                    </span>
+                    <span className="shrink-0 text-[var(--muted)]">↗</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[0.7rem] text-[var(--muted)]">
+              Queries: {result.queries.join(" · ")}
+            </p>
+          </div>
         )}
 
-        {/* AI notes + flashcards for this topic, straight from the syllabus */}
+        {/* Notes + flashcards for this topic, straight from the syllabus */}
         <TopicNotes topic={topic} subject={subject} syllabus={syllabus} />
       </div>
     </section>
