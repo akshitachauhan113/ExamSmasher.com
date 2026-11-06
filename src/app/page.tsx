@@ -457,12 +457,13 @@ export default function Home() {
     [notify, rematchVideos, beginVideoSearch],
   );
 
-  /** Fills the syllabus box from an uploaded file. */
+  /** Fills the syllabus box from an uploaded file (or clears it when its
+   *  last file was removed). The toast only fires when files were read. */
   const handleFileText = useCallback(
     (text: string, fileName: string) => {
       setSyllabus(text);
       setFormError(null);
-      notify(`File padh li gaya: ${fileName}`);
+      if (fileName) notify(`File padh li gaya: ${fileName}`);
     },
     [notify],
   );

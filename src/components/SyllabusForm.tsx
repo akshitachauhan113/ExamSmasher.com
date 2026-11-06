@@ -126,6 +126,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
               value={syllabus}
               onChange={(e) => onSyllabusChange(e.target.value)}
               rows={9}
+              aria-label="Syllabus text"
               placeholder={`Unit-I: Relations and Functions\n1. Types of relations, equivalence relations, one-one and onto functions…\n\nUnit-II: Algebra\n2. Matrices, determinants…`}
               className="field w-full resize-y px-3 py-2.5 text-sm leading-relaxed"
             />

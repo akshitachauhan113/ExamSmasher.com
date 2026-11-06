@@ -12,6 +12,14 @@ import {
   parsePapers as parsePaperQuestions,
 } from "@/lib/engine";
 import { renderMarkdown } from "@/lib/markdown";
+import {
+  kindFromName,
+  kindLabel,
+  MAX_UPLOAD_BYTES,
+  shrinkImage,
+  uploadKey,
+  validateUpload,
+} from "@/lib/files";
 import type {
   EngineSource,
   ExamPlanResponse,
@@ -108,8 +116,12 @@ export function ExamMode({
   const [busyExtract, setBusyExtract] = useState(false);
   const [busyPlan, setBusyPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  /** "2/4 · paper.pdf" while a batch of papers is being read. */
+  const [extracting, setExtracting] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cancelExtractRef = useRef(false);
   const planRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const buildPlanRef = useRef<
     ((questions: PyqQuestion[], papers?: PyqPaper[]) => Promise<void>) | null
@@ -117,54 +129,126 @@ export function ExamMode({
 
   /* ------------------------------ upload ------------------------------ */
 
+  /**
+   * Upload one or many papers. Files are validated and de-duplicated first
+   * (never silently ignored — every problem comes back with its filename),
+   * then read one at a time IN ORDER so each success appears in the list as
+   * it lands. Cancel stops between files and keeps what was already read.
+   */
   const addFiles = useCallback(
     async (files: FileList | File[] | null) => {
       const list = Array.from(files ?? []);
       if (list.length === 0 || busyExtract) return;
 
+      setError(null);
+      setNotice(null);
+
+      const failures: string[] = [];
+      const already = new Set(papers.map((p) => p.fileName));
+      const seen = new Set<string>();
+      const queue: File[] = [];
+      let duplicates = 0;
+      for (const file of list) {
+        const validation = validateUpload(file);
+        if (validation) {
+          failures.push(`${file.name}: ${validation}`);
+          continue;
+        }
+        const key = uploadKey(file);
+        if (already.has(file.name) || seen.has(key)) {
+          duplicates += 1;
+          continue;
+        }
+        seen.add(key);
+        queue.push(file);
+      }
+
       const room = MAX_PAPERS - papers.length;
-      if (room <= 0) {
-        setError(`At most ${MAX_PAPERS} papers. Trend is reliable with 2-3 anyway.`);
+      const overflow = Math.max(0, queue.length - room);
+      const targets = queue.slice(0, Math.max(0, room));
+      if (overflow > 0) {
+        failures.push(
+          `${overflow} file skipped — at most ${MAX_PAPERS} papers rakh sakte hain.`,
+        );
+      }
+      if (duplicates > 0) {
+        setNotice(
+          `${duplicates} file pehle se added hai — skip kar diya.`,
+        );
+      }
+      if (targets.length === 0) {
+        if (failures.length > 0) setError(failures.join(" · "));
         return;
       }
 
       setBusyExtract(true);
-      setError(null);
-      const added: PendingPaper[] = [];
+      cancelExtractRef.current = false;
+      // Accumulate locally: setExam's closure would otherwise keep re-spreading
+      // the papers list captured at render start.
+      let currentPapers = [...papers];
+      let read = 0;
+      let cancelled = false;
 
-      for (const file of list.slice(0, room)) {
+      for (const file of targets) {
+        if (cancelExtractRef.current) {
+          cancelled = true;
+          break;
+        }
+        setExtracting(`${read + 1}/${targets.length} · ${file.name}`);
         try {
+          const payload = kindFromName(file.name) === "image" ? await shrinkImage(file) : file;
+          if (payload.size > MAX_UPLOAD_BYTES) {
+            throw new Error("4 MB se bada hai — compress karke dobara try karo.");
+          }
           const form = new FormData();
-          form.append("file", file);
+          form.append("file", payload, payload.name);
           const response = await fetch("/api/extract", { method: "POST", body: form });
           const data: ExtractResponse = await response.json();
-          if (!data.ok || !data.text) throw new Error(data.error || "Could not read that file.");
+          if (!data.ok || !data.text) {
+            throw new Error(data.error || "Could not read that file.");
+          }
 
-          added.push({
-            id: `p${Date.now().toString(36)}-${added.length}`,
-            year: guessYear(file.name) ?? "",
-            label: "Question paper",
-            fileName: file.name,
-            text: data.text,
-          });
+          read += 1;
+          currentPapers = [
+            ...currentPapers,
+            {
+              id: `p${Date.now().toString(36)}-${currentPapers.length}`,
+              year: guessYear(file.name) ?? "",
+              label: "Question paper",
+              fileName: file.name,
+              text: data.text,
+            },
+          ];
+          // A new paper invalidates the old trend — the student re-reads +
+          // rebuilds. Applying after every file keeps partial progress safe.
+          setExam({ papers: currentPapers, questions: [], parsedPapers: [], plan: null });
         } catch (err) {
-          setError(
-            err instanceof Error
-              ? `${file.name}: ${err.message}`
-              : `Could not read ${file.name}.`,
+          failures.push(
+            `${file.name}: ${err instanceof Error && err.message ? err.message : "Could not read that file."}`,
           );
         }
       }
 
-      if (added.length > 0) {
-        // A new paper invalidates the old trend — the student re-reads + rebuilds.
-        setExam({ papers: [...papers, ...added], questions: [], parsedPapers: [], plan: null });
-      }
+      setExtracting(null);
       setBusyExtract(false);
       if (inputRef.current) inputRef.current.value = "";
+      if (failures.length > 0) setError(failures.join(" · "));
+      if (cancelled) {
+        setNotice(
+          `Cancel kiya — ${targets.length - read} file${targets.length - read > 1 ? "s" : ""} nahi padhi gayi. Dubara choose karke add kar sakte ho.`,
+        );
+      } else if (read > 0 && failures.length === 0) {
+        setNotice(
+          `${read} paper${read > 1 ? "s" : ""} add ho gaye — ab year bharo aur trend banao.`,
+        );
+      }
     },
     [busyExtract, papers, setExam],
   );
+
+  const cancelExtract = useCallback(() => {
+    cancelExtractRef.current = true;
+  }, []);
 
   /* ------------------------------ parsing ----------------------------- */
 
@@ -330,28 +414,46 @@ export function ExamMode({
             </span>
             <div className="min-w-0">
               <p className="text-sm font-semibold">
-                {busyExtract ? "Reading your papers…" : "Previous-year papers upload karo"}
+                {busyExtract
+                  ? extracting
+                    ? `Reading ${extracting}…`
+                    : "Reading your papers…"
+                  : "Previous-year papers upload karo"}
               </p>
               <p className="truncate text-xs text-[var(--muted)]">
                 PDF · DOCX · TXT · ya paper ki photo · {papers.length}/{MAX_PAPERS} added
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            disabled={busyExtract}
-            onClick={() => inputRef.current?.click()}
-            className="btn-ghost shrink-0 px-3 py-2 text-xs"
-          >
-            Choose papers
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {busyExtract && (
+              <button
+                type="button"
+                onClick={cancelExtract}
+                className="btn-ghost px-3 py-2 text-xs"
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busyExtract}
+              onClick={() => inputRef.current?.click()}
+              className="btn-ghost px-3 py-2 text-xs"
+            >
+              {busyExtract ? "Reading…" : "Choose papers"}
+            </button>
+          </div>
           <input
             ref={inputRef}
             type="file"
             accept={ACCEPT}
             multiple
             className="hidden"
-            onChange={(e) => void addFiles(e.target.files)}
+            onChange={(e) => {
+              void addFiles(e.target.files);
+              e.target.value = ""; // so the same file can be re-chosen after a remove
+            }}
             aria-label="Upload previous-year papers"
           />
         </div>
@@ -364,6 +466,7 @@ export function ExamMode({
                 className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2"
                 style={{ borderColor: "var(--line)", background: "var(--surface-2)" }}
               >
+                <span className="chip shrink-0">{kindLabel(kindFromName(paper.fileName))}</span>
                 <span className="min-w-0 flex-1 truncate text-xs font-semibold">
                   {paper.fileName}
                 </span>
@@ -397,12 +500,16 @@ export function ExamMode({
           </ul>
         )}
 
+        {notice && (
+          <p className="mt-2 text-xs text-[var(--muted)]">{notice}</p>
+        )}
+
         {error && (
           <p className="mt-2 flex items-start gap-1.5 text-xs" style={{ color: "var(--bad)" }}>
             <span className="mt-0.5 shrink-0">
               <AlertIcon width={13} height={13} />
             </span>
-            {error}
+            <span className="min-w-0">{error}</span>
           </p>
         )}
 
