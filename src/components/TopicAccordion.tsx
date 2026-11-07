@@ -41,6 +41,8 @@ interface TopicAccordionProps {
   onCollapseAll: () => void;
   /** Renders one topic's full panel (search links, notes, PYQ practice…). */
   renderTopic: (topic: Topic, index: number) => ReactNode;
+  /** Optional per-unit completion (Complete Syllabus mode shows a bar). */
+  unitProgress?: (key: string) => { done: number; total: number } | null;
 }
 
 /**
@@ -55,6 +57,7 @@ export function TopicAccordion({
   onExpandAll,
   onCollapseAll,
   renderTopic,
+  unitProgress,
 }: TopicAccordionProps) {
   const groups = groupByUnit(topics);
   const indexOf = new Map(topics.map((topic, index) => [topic.id, index]));
@@ -80,6 +83,11 @@ export function TopicAccordion({
         {groups.map((group) => {
           const open = expanded.has(group.key);
           const minutes = group.topics.reduce((sum, t) => sum + t.estimatedMinutes, 0);
+          const progress = unitProgress?.(group.key) ?? null;
+          const pct =
+            progress && progress.total > 0
+              ? Math.round((progress.done / progress.total) * 100)
+              : 0;
           return (
             <section
               key={group.key}
@@ -109,6 +117,34 @@ export function TopicAccordion({
                     {group.topics.length} topic{group.topics.length > 1 ? "s" : ""} · ~{minutes} min
                   </span>
                 </span>
+                {progress && (
+                  <span
+                    className="hidden shrink-0 items-center gap-1.5 sm:flex"
+                    title={`${progress.done}/${progress.total} topics done in this unit`}
+                  >
+                    <span
+                      className="block h-1.5 w-16 overflow-hidden rounded-full"
+                      style={{ background: "var(--surface-2)" }}
+                    >
+                      <span
+                        className="block h-full rounded-full transition-all"
+                        style={{
+                          width: `${pct}%`,
+                          background:
+                            pct === 100
+                              ? "var(--good)"
+                              : "linear-gradient(90deg, var(--brand), var(--brand-2))",
+                        }}
+                      />
+                    </span>
+                    <span
+                      className="text-[0.66rem] font-bold"
+                      style={{ color: pct === 100 ? "var(--good)" : "var(--muted)" }}
+                    >
+                      {progress.done}/{progress.total}
+                    </span>
+                  </span>
+                )}
                 <span className="chip shrink-0">{open ? "Open" : "Expand"}</span>
               </button>
 

@@ -120,7 +120,7 @@ export function normalizeParsedQuestions(
 /* -------------------------------------------------------------------------- */
 
 /** Groups near-identical wording so real repetition becomes visible. */
-function fingerprint(text: string): string {
+export function fingerprint(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")

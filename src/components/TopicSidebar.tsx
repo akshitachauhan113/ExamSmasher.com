@@ -17,6 +17,8 @@ interface TopicSidebarProps {
   onToggleStudied: (title: string) => void;
   /** Must / Might / Can skip — PYQ trend when available, else syllabus importance. */
   bandFor: (topic: Topic) => ExamTopic["band"];
+  /** Complete Syllabus mode: uniform coverage, so no priority chips. */
+  hideBand?: boolean;
 }
 
 const BAND_STYLE: Record<ExamTopic["band"], string> = {
@@ -37,6 +39,7 @@ export function TopicSidebar({
   isStudied,
   onToggleStudied,
   bandFor,
+  hideBand,
 }: TopicSidebarProps) {
   const matchPercent = topics.length ? Math.round((completed / topics.length) * 100) : 0;
   const studyPercent = topics.length ? Math.round((studiedCount / topics.length) * 100) : 0;
@@ -151,13 +154,15 @@ export function TopicSidebar({
                           {topic.title}
                         </p>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <span
-                            className="text-[0.66rem] font-bold uppercase tracking-wide"
-                            style={{ color: BAND_STYLE[band] }}
-                            title="Must / Might / Can skip"
-                          >
-                            ● {BAND_LABEL[band].replace(/^\S+\s/, "")}
-                          </span>
+                          {!hideBand && (
+                            <span
+                              className="text-[0.66rem] font-bold uppercase tracking-wide"
+                              style={{ color: BAND_STYLE[band] }}
+                              title="Must / Might / Can skip"
+                            >
+                              ● {BAND_LABEL[band].replace(/^\S+\s/, "")}
+                            </span>
+                          )}
                           <span className="text-[0.68rem] text-[var(--muted)]">
                             {topic.difficulty}
                           </span>
@@ -179,8 +184,14 @@ export function TopicSidebar({
                           >
                             <CheckIcon width={15} height={15} />
                           </span>
-                        ) : (
+                        ) : phase === "matching" ? (
                           <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--line)] border-t-[var(--brand)]" />
+                        ) : (
+                          <span
+                            className="block h-3.5 w-3.5 rounded-full border-2"
+                            style={{ borderColor: "var(--line)" }}
+                            title="Search links abhi nahi bane"
+                          />
                         )}
                       </span>
                     </div>

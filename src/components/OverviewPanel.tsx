@@ -6,8 +6,11 @@ import { CalendarIcon, CheckIcon, CopyIcon, DownloadIcon, ListIcon, RefreshIcon 
 type Phase = "idle" | "analyzing" | "papers" | "matching" | "done";
 
 interface OverviewPanelProps {
+  /** Subject line of the analysis (dashboard header). */
+  subject: string;
   stats: {
     topics: number;
+    units: number;
     must: number;
     should: number;
     ifTime: number;
@@ -19,6 +22,17 @@ interface OverviewPanelProps {
     papers: number;
     studied: number;
   };
+  /** Complete Syllabus Preparation progress, 0-100. */
+  progressPct: number;
+  /** Smart priority counts — null until papers are analysed. */
+  priorityCounts: {
+    high: number;
+    medium: number;
+    low: number;
+    unobserved: number;
+  } | null;
+  /** One-line PYQ evidence summary, null when no papers exist. */
+  evidenceSummary: string | null;
   phase: Phase;
   hasPlan: boolean;
   pyqSkipped: boolean;
@@ -57,7 +71,11 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
  * already existed on the page — it is reorganised, not changed.
  */
 export function OverviewPanel({
+  subject,
   stats,
+  progressPct,
+  priorityCounts,
+  evidenceSummary,
   phase,
   hasPlan,
   pyqSkipped,
@@ -93,12 +111,47 @@ export function OverviewPanel({
     <div className="space-y-3">
       {/* Short summary first */}
       <div className="card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Dashboard identity — subject, totals, complete-syllabus progress */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-extrabold" title={subject}>
+              {subject || "Analysis overview"}
+            </p>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              {stats.units} unit{stats.units === 1 ? "" : "s"} · {stats.topics} topics ·{" "}
+              {stats.papers > 0
+                ? `${stats.papers} PYQ paper${stats.papers > 1 ? "s" : ""} analysed`
+                : "no PYQ papers yet"}
+            </p>
+          </div>
+          <div className="text-right">
+            <p
+              className="text-lg font-extrabold leading-none"
+              style={{ color: "var(--brand)" }}
+            >
+              {progressPct}%
+            </p>
+            <p className="mt-0.5 text-[0.66rem] text-[var(--muted)]">syllabus complete</p>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            {priorityCounts ? (
+              <>
+                <Stat label="High priority" value={String(priorityCounts.high)} accent />
+                <Stat label="Medium" value={String(priorityCounts.medium)} />
+                <Stat label="Low" value={String(priorityCounts.low)} />
+                <Stat label="Not observed" value={String(priorityCounts.unobserved)} />
+              </>
+            ) : (
+              <>
+                <Stat label="Must-do" value={String(stats.must)} accent />
+                <Stat label="Should" value={String(stats.should)} />
+                <Stat label="Can skip" value={String(stats.ifTime)} />
+              </>
+            )}
             <Stat label="Topics" value={String(stats.topics)} />
-            <Stat label="Must-do" value={String(stats.must)} accent />
-            <Stat label="Should" value={String(stats.should)} />
-            <Stat label="Can skip" value={String(stats.ifTime)} />
             <Stat
               label="Topics with real PYQs"
               value={hasPlan ? `${stats.pyqCovered}/${stats.topics}` : "—"}
@@ -168,6 +221,15 @@ export function OverviewPanel({
             </button>
           </div>
         </div>
+
+        {evidenceSummary && (
+          <p
+            className="mt-3 border-t pt-2.5 text-[0.72rem] leading-relaxed text-[var(--muted)]"
+            style={{ borderColor: "var(--line)" }}
+          >
+            <strong className="text-[var(--text)]">PYQ summary:</strong> {evidenceSummary}
+          </p>
+        )}
       </div>
 
       {/* The single next step */}

@@ -22,6 +22,8 @@ interface SyllabusFormProps {
   /** Called when an uploaded file could not be read. */
   onFileError: (message: string) => void;
   busy: boolean;
+  /** Short processing-stage label shown on the button while busy. */
+  stage?: string | null;
   hasResults: boolean;
   error: string | null;
 }
@@ -82,6 +84,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
     onFileText,
     onFileError,
     busy,
+    stage,
     hasResults,
     error,
   } = props;
@@ -212,7 +215,7 @@ export function SyllabusForm(props: SyllabusFormProps) {
           {busy ? (
             <>
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              Analysing…
+              {stage ?? "Analysing…"}
             </>
           ) : (
             <>

@@ -214,7 +214,9 @@ export function ExamMode({
             {
               id: `p${Date.now().toString(36)}-${currentPapers.length}`,
               year: guessYear(file.name) ?? "",
-              label: "Question paper",
+              // The file name keeps every paper distinct (two files with the
+              // same year must never merge) and shows which file is which.
+              label: file.name.replace(/\.[^.]+$/, "") || "Question paper",
               fileName: file.name,
               text: data.text,
             },

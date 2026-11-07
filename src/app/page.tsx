@@ -6,6 +6,9 @@ import { CheckIcon, GraduationIcon } from "@/components/Icons";
 import { AiStatusChip } from "@/components/AiStatusChip";
 import { ChatWidget } from "@/components/ChatWidget";
 import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
+import { CompleteSyllabusPanel } from "@/components/CompleteSyllabusPanel";
+import { SmartExamPanel } from "@/components/SmartExamPanel";
+import { PyqEvidencePanel } from "@/components/PyqEvidencePanel";
 import { StudyPlanModal } from "@/components/StudyPlanModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -26,22 +29,32 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { StudySpacePanel } from "@/components/StudySpacePanel";
 import { useStudiedTopics } from "@/hooks/useStudiedTopics";
 import { primeBrowserAi } from "@/lib/ai/run";
-import { analyzeSyllabus, buildPlan, topicSearches } from "@/lib/engine";
+import {
+  analyzeFullSyllabus,
+  buildPlan,
+  buildPyqEvidence,
+  buildSmartPriority,
+  syllabusToTopics,
+  topicSearches,
+} from "@/lib/engine";
+import { clearAnalysis, loadAnalysis, saveAnalysis } from "@/lib/analysisCache";
 import { buildCsv, buildMarkdown, copyText, downloadFile } from "@/lib/exporters";
 import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
 import type {
-  AnalyzeResponse,
   ExamPlanResponse,
   ExamTopic,
   PlanResponse,
+  PyqEvidence,
   PyqQuestion,
+  SmartPriorityResult,
+  SyllabusAnalysis,
   Topic,
   TopicResult,
 } from "@/lib/types";
 
 type Phase = "idle" | "analyzing" | "papers" | "matching" | "done";
 /** Which analysis tab the student is reading. */
-type AnalysisTab = "overview" | "all" | "important" | "pyq" | "playlists";
+type AnalysisTab = "overview" | "complete" | "smart" | "pyq" | "playlists";
 
 interface PlanState {
   open: boolean;
@@ -84,6 +97,19 @@ export default function Home() {
   /** True when the student deliberately skipped the PYQ step for now. */
   const [pyqSkipped, setPyqSkipped] = useState(false);
 
+  /* -------------------- Phase 4 · analysis surfaces -------------------- */
+  /** Full uncapped syllabus structure — units, topics, subtopics, unclear lines. */
+  const [syllabusAnalysis, setSyllabusAnalysis] = useState<SyllabusAnalysis | null>(null);
+  /** PYQ evidence counted from the uploaded papers (chunked, non-blocking). */
+  const [evidence, setEvidence] = useState<PyqEvidence | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [evidenceProgress, setEvidenceProgress] = useState(0);
+  /** Bumped to re-run a failed evidence count. */
+  const [evidenceNonce, setEvidenceNonce] = useState(0);
+  /** Short stage label shown on the Analyse button while it works. */
+  const [stage, setStage] = useState<string | null>(null);
+
   /* --------------------------- navigation views ------------------------- */
   const [view, setView] = useState<AppView>("home");
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>("overview");
@@ -110,6 +136,14 @@ export default function Home() {
   const searchStartedRef = useRef(false);
   /** Topic-order signature of the last plan the links were built against. */
   const matchedPlanRef = useRef("");
+  /** Questions+topics signature the evidence was last counted for. */
+  const evidenceSigRef = useRef("");
+  /** Set after a cached analysis is restored — its links rebuild exactly once. */
+  const restoreLinksRef = useRef(false);
+  /** Debounce handle for the analysis cache writes. */
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The cache is hydrated at most once per page load. */
+  const restoredRef = useRef(false);
 
   const studiedApi = useStudiedTopics();
   const { isStudied, toggle: toggleStudied, clearAll: clearStudied } = studiedApi;
@@ -210,6 +244,75 @@ export default function Home() {
    * "syllabus covered" score, which used to be a video-match number.
    */
   const pyqCovered = useMemo(() => pyqByTopic.size, [pyqByTopic]);
+
+  /* ------------------ Phase 4 · smart priority + PYQ evidence ------------------ */
+
+  /** High / Medium / Low + reasons — built from the SAME signals the PYQ tab
+   *  displays, so the two views can never disagree on a count. */
+  const priority = useMemo<SmartPriorityResult>(
+    () => buildSmartPriority({ topics, plan: exam.plan }),
+    [topics, exam.plan],
+  );
+
+  /** Signature of the exact inputs the evidence is counted from. */
+  const evidenceSig = useMemo(() => {
+    if (!exam.plan || exam.questions.length === 0) return "";
+    const questionIds = exam.questions.map((item) => item.id).join(",");
+    const topicIds = topics.map((item) => item.id).join(",");
+    return `${questionIds}|${topicIds}`;
+  }, [exam.plan, exam.questions, topics]);
+
+  /** Counts evidence once per questions-set — same files are never re-counted. */
+  useEffect(() => {
+    if (!evidenceSig || !exam.plan) {
+      if (evidenceSigRef.current) {
+        evidenceSigRef.current = "";
+        setEvidence(null);
+        setEvidenceError(null);
+      }
+      return;
+    }
+    if (evidenceSigRef.current === evidenceSig) return;
+    evidenceSigRef.current = evidenceSig;
+
+    let cancelled = false;
+    setEvidenceLoading(true);
+    setEvidenceError(null);
+    setEvidenceProgress(0);
+
+    buildPyqEvidence(
+      { topics, questions: exam.questions, plan: exam.plan },
+      (done, total) => {
+        if (!cancelled) setEvidenceProgress(total > 0 ? done / total : 1);
+      },
+    )
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) {
+          setEvidence(result);
+          setEvidenceProgress(1);
+        } else {
+          setEvidenceError(result.error || "Evidence count nahi ho paya.");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setEvidenceError(err instanceof Error ? err.message : "Evidence count nahi ho paya.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEvidenceLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [evidenceSig, evidenceNonce, exam.plan, exam.questions, topics]);
+
+  /** Retry a failed evidence count (same inputs, fresh run). */
+  const retryEvidence = useCallback(() => {
+    setEvidenceNonce((value) => value + 1);
+  }, []);
 
   /* ------------------------------ matching ------------------------------ */
   /**
@@ -319,6 +422,10 @@ export default function Home() {
     setFormError(null);
     setResults({});
     setTopics([]);
+    setSyllabusAnalysis(null);
+    setEvidence(null);
+    setEvidenceError(null);
+    evidenceSigRef.current = "";
     setActiveId(null);
     // Fresh analysis starts on the Overview tab with all units closed.
     setView("home");
@@ -330,24 +437,34 @@ export default function Home() {
     setPhase("analyzing");
 
     try {
-      // Runs in this browser: rule-based parser first, the optional model
-      // only when it has genuinely loaded. No key, no network call.
-      const data: AnalyzeResponse = await analyzeSyllabus({ syllabus, subject });
+      // Stage 1 — paint the button label before the synchronous parse lands.
+      setStage("Syllabus padh rahe ho…");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (controller.signal.aborted) return;
 
-      if (!data.ok || !data.topics?.length) {
-        throw new Error(data.error || "Could not extract topics from this syllabus.");
+      // The deterministic full parser: uncapped, hierarchy-preserving,
+      // exact-only dedupe, unclear lines reported instead of guessed.
+      const full = analyzeFullSyllabus({ syllabus, subject });
+      if (!full.ok || full.totalTopics === 0) {
+        throw new Error(full.error || "Could not extract topics from this syllabus.");
       }
 
-      const courseName = data.subject || subject || "Your course";
-      setTopics(data.topics);
+      // Stage 2 — flatten units → topics for the rest of the app.
+      setStage("Units aur topics bana rahe ho…");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (controller.signal.aborted) return;
+
+      const derived = syllabusToTopics(full);
+      if (derived.length === 0) {
+        throw new Error("Could not extract topics from this syllabus.");
+      }
+
+      const courseName = full.subject || subject || "Your course";
+      setSyllabusAnalysis(full);
+      setTopics(derived);
       setSubjectName(courseName);
-      if (data.truncated) {
-        notify("Syllabus was large — showing the top topics first.");
-      }
       notify(
-        data.source === "ai"
-          ? "🧠 Browser AI model ne syllabus split kiya."
-          : "📄 Syllabus split by the rule-based engine (browser AI optional).",
+        `📄 ${full.totalUnits} unit · ${full.totalTopics} topics mile — rule-based parser se (koi AI key zaroori nahi).`,
       );
       // Step 1 done — topics are on the board. Search links deliberately WAIT
       // for the PYQ step so their order follows real exam importance, not guesses.
@@ -359,6 +476,8 @@ export default function Home() {
       if (controller.signal.aborted) return;
       setPhase("idle");
       setFormError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setStage(null);
     }
   }, [syllabus, subject, setExam, notify]);
 
@@ -474,9 +593,13 @@ export default function Home() {
     abortRef.current?.abort();
     searchStartedRef.current = false;
     matchedPlanRef.current = "";
+    evidenceSigRef.current = "";
     setTopics([]);
     setResults({});
     setSubjectName("");
+    setSyllabusAnalysis(null);
+    setEvidence(null);
+    setEvidenceError(null);
     setExamState(EMPTY_EXAM_STATE);
     setPyqSkipped(false);
     setPhase("idle");
@@ -485,7 +608,94 @@ export default function Home() {
     setView("home");
     setAnalysisTab("overview");
     setExpandedUnits(new Set());
+    // "Start over" also forgets the cached analysis — next load starts clean.
+    clearAnalysis();
   }, []);
+
+  /* ----------------------- analysis cache (Phase 4) ----------------------- */
+
+  /** Hydrate a previous analysis so a refresh never loses the work — and the
+   *  SAME syllabus text is never analysed again (its result is the cache). */
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+
+    const cached = loadAnalysis();
+    if (!cached) return;
+
+    setSyllabus(cached.syllabus);
+    setSubject(cached.subject);
+    setSubjectName(cached.subjectName);
+    setSyllabusAnalysis(cached.analysis);
+    setTopics(cached.topics);
+    setPyqSkipped(cached.pyqSkipped);
+    setExamState({
+      papers: cached.exam.papers,
+      questions: cached.exam.questions,
+      parsedPapers: cached.exam.parsedPapers,
+      plan: cached.exam.plan,
+    });
+
+    // Adopt the cached evidence (and its signature) so the count below does
+    // not run again for the same questions.
+    if (cached.evidence?.ok) {
+      setEvidence(cached.evidence);
+      evidenceSigRef.current =
+        cached.exam.plan && cached.exam.questions.length > 0
+          ? `${cached.exam.questions.map((item) => item.id).join(",")}|${cached.topics
+              .map((item) => item.id)
+              .join(",")}`
+          : "";
+    } else {
+      evidenceSigRef.current = "";
+    }
+
+    // Restored phase is always "papers": the search LINKS are not persisted —
+    // they rebuild exactly once below when this analysis had already built them.
+    searchStartedRef.current = false;
+    matchedPlanRef.current = "";
+    setPhase("papers");
+    if (cached.exam.plan || cached.pyqSkipped) restoreLinksRef.current = true;
+
+    notify("♻️ Pichhla analysis wapas aa gaya — same syllabus dobara analyse nahi kiya.");
+  }, [notify]);
+
+  /** After a cache restore, rebuild the search links exactly once. */
+  useEffect(() => {
+    if (!restoreLinksRef.current) return;
+    if (topics.length === 0) return;
+    if (!exam.plan && !pyqSkipped) return;
+    restoreLinksRef.current = false;
+    void beginVideoSearch();
+  }, [topics, exam.plan, pyqSkipped, beginVideoSearch]);
+
+  /** Persist the analysis (debounced) so a refresh restores it as-is. */
+  useEffect(() => {
+    if (topics.length === 0 || !syllabusAnalysis?.ok) return;
+
+    const payload = {
+      v: 1 as const,
+      syllabus,
+      subject,
+      subjectName,
+      topics,
+      analysis: syllabusAnalysis,
+      pyqSkipped,
+      exam: {
+        papers: exam.papers,
+        questions: exam.questions,
+        parsedPapers: exam.parsedPapers,
+        plan: exam.plan,
+      },
+      evidence,
+    };
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => saveAnalysis(payload), 400);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [syllabus, subject, subjectName, topics, syllabusAnalysis, pyqSkipped, exam, evidence]);
 
   /* --------------------------- navigation ------------------------------ */
   /** Scrolls to an element after the view/tab has had a frame to render. */
@@ -504,6 +714,13 @@ export default function Home() {
   const goPyq = useCallback(() => {
     setView("home");
     setAnalysisTab("pyq");
+    scrollToEl("analysis", 90);
+  }, [scrollToEl]);
+
+  /** Opens the Smart Exam Preparation tab. */
+  const goSmart = useCallback(() => {
+    setView("home");
+    setAnalysisTab("smart");
     scrollToEl("analysis", 90);
   }, [scrollToEl]);
 
@@ -550,14 +767,14 @@ export default function Home() {
             scrollToEl("syllabus-form", 60);
             return;
           }
-          goPyq();
+          goSmart();
           break;
         case "space":
           openSpace();
           break;
       }
     },
-    [topics.length, linksReady, notify, scrollToEl, goPyq, openSpace],
+    [topics.length, linksReady, notify, scrollToEl, goPyq, goSmart, openSpace],
   );
 
   /* --------------------------- topic accordion -------------------------- */
@@ -620,14 +837,14 @@ export default function Home() {
 
       const onList =
         view === "home" &&
-        (analysisTab === "all" || analysisTab === "important") &&
+        (analysisTab === "complete" || analysisTab === "smart") &&
         document.getElementById(`topic-${id}`) !== null;
 
       if (onList) {
         window.setTimeout(scrollToTopic, 70);
       } else {
         setView("home");
-        setAnalysisTab("all");
+        setAnalysisTab("complete");
         window.setTimeout(scrollToTopic, 170);
       }
       setActiveId(id);
@@ -724,16 +941,41 @@ export default function Home() {
     return { must, should, ifTime };
   }, [bandByTopic]);
 
-  /** The "important" tab: must-do with papers, core+important without. */
-  const importantTopics = useMemo(
-    () =>
-      displayTopics.filter((topic) =>
-        exam.plan ? bandByTopic.get(topic.id) === "must" : topic.importance !== "bonus",
-      ),
-    [displayTopics, exam.plan, bandByTopic],
+  /** Complete Syllabus Preparation progress, 0-100 (same ticks, one number). */
+  const progressPct = useMemo(
+    () => (topics.length > 0 ? Math.round((studiedCount / topics.length) * 100) : 0),
+    [studiedCount, topics.length],
   );
 
-  const activeTopicList = analysisTab === "important" ? importantTopics : displayTopics;
+  /** Per-unit tick counts for the Complete Syllabus accordion headers. */
+  const unitProgress = useMemo(() => {
+    const map = new Map<string, { done: number; total: number }>();
+    for (const topic of topics) {
+      const key = unitKeyOf(topic);
+      const row = map.get(key) ?? { done: 0, total: 0 };
+      row.total += 1;
+      if (isStudied(topic.title)) row.done += 1;
+      map.set(key, row);
+    }
+    return map;
+  }, [topics, isStudied]);
+
+  /** One-line PYQ evidence summary for the dashboard — real counts only. */
+  const evidenceSummary = useMemo(() => {
+    if (!evidence?.ok) return null;
+    const parts = [
+      `${evidence.papersAnalyzed} paper${evidence.papersAnalyzed === 1 ? "" : "s"} · ${evidence.questionsAnalyzed} questions`,
+      `${evidence.exactCount} exact repeats · ${evidence.similarCount} similar concepts`,
+      `${evidence.topicFrequency.length} topics covered`,
+    ];
+    if (evidence.crossPaperTopics.length > 0) {
+      parts.push(`${evidence.crossPaperTopics.length} asked in 2+ papers`);
+    }
+    return parts.join(" · ");
+  }, [evidence]);
+
+  /** The "important" tab used to filter topics — Phase 4 keeps EVERY topic
+   *  visible in both preparation modes and groups instead of hiding. */
 
   /** Shown where links do not exist yet — never fake skeletons forever. */
   const linksHint = (
@@ -843,6 +1085,7 @@ export default function Home() {
                 onFileText={handleFileText}
                 onFileError={handleFileError}
                 busy={busy}
+                stage={stage}
                 hasResults={topics.length > 0}
                 error={formError}
               />
@@ -857,11 +1100,11 @@ export default function Home() {
                   onChange={(id) => setAnalysisTab(id as AnalysisTab)}
                   tabs={[
                     { id: "overview", label: "Overview" },
-                    { id: "all", label: "All Topics", badge: String(topics.length) },
+                    { id: "complete", label: "Complete Syllabus", badge: String(topics.length) },
                     {
-                      id: "important",
-                      label: "Important Topics",
-                      badge: String(importantTopics.length),
+                      id: "smart",
+                      label: "Smart Exam Preparation",
+                      ...(priority.hasPapers ? { badge: `${priority.counts.high} high` } : {}),
                     },
                     {
                       id: "pyq",
@@ -875,8 +1118,10 @@ export default function Home() {
                 <div className="mt-3">
                   {analysisTab === "overview" && (
                     <OverviewPanel
+                      subject={subjectName}
                       stats={{
                         topics: topics.length,
+                        units: syllabusAnalysis?.totalUnits ?? 0,
                         must: bandCounts.must,
                         should: bandCounts.should,
                         ifTime: bandCounts.ifTime,
@@ -886,6 +1131,9 @@ export default function Home() {
                         papers: exam.papers.length,
                         studied: studiedCount,
                       }}
+                      progressPct={progressPct}
+                      priorityCounts={priority.hasPapers ? priority.counts : null}
+                      evidenceSummary={evidenceSummary}
                       phase={phase}
                       hasPlan={Boolean(exam.plan)}
                       pyqSkipped={pyqSkipped}
@@ -906,16 +1154,26 @@ export default function Home() {
                     />
                   )}
 
-                  {(analysisTab === "all" || analysisTab === "important") &&
-                    (linksReady ? (
-                      activeTopicList.length === 0 ? (
-                        <div className="card p-5 text-center text-sm text-[var(--muted)]">
-                          Is view me koi topic nahi — All Topics tab me poora syllabus dekho.
-                        </div>
-                      ) : (
+                  {/* Complete Syllabus — every unit/topic, tick progress.
+                      Works WITHOUT PYQ papers (that is the whole point). */}
+                  {analysisTab === "complete" &&
+                    (syllabusAnalysis ? (
+                      <div className="space-y-3">
+                        <CompleteSyllabusPanel
+                          subject={subjectName}
+                          analysis={syllabusAnalysis}
+                          topics={topics}
+                          studiedCount={studiedCount}
+                          isStudied={isStudied}
+                          onResetProgress={() => {
+                            clearStudied();
+                            notify("Progress reset — sab topics dobara pending.");
+                          }}
+                        />
+
                         <div className="grid items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
                           <TopicSidebar
-                            topics={displayTopics}
+                            topics={topics}
                             results={results}
                             activeId={activeId}
                             onJump={jumpTo}
@@ -926,21 +1184,36 @@ export default function Home() {
                             isStudied={isStudied}
                             onToggleStudied={handleToggleStudied}
                             bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
+                            hideBand
                           />
 
                           <TopicAccordion
-                            topics={activeTopicList}
+                            topics={topics}
                             expanded={expandedUnits}
                             onToggleUnit={toggleUnit}
                             onExpandAll={expandAll}
                             onCollapseAll={collapseAll}
                             renderTopic={renderTopicPanel}
+                            unitProgress={(key) => unitProgress.get(key) ?? null}
                           />
                         </div>
-                      )
+                      </div>
                     ) : (
-                      linksHint
+                      <div className="card p-5 text-center text-sm text-[var(--muted)]">
+                        Complete Syllabus abhi khali hai — syllabus analyse karte hi poora unit-wise
+                        structure yahan milega.
+                      </div>
                     ))}
+
+                  {/* Smart Exam Preparation — High/Medium/Low with evidence. */}
+                  {analysisTab === "smart" && (
+                    <SmartExamPanel
+                      priority={priority}
+                      topics={topics}
+                      plan={exam.plan}
+                      onGoUpload={goPyq}
+                    />
+                  )}
 
                   {analysisTab === "pyq" && (
                     <div className="space-y-3">
@@ -982,6 +1255,19 @@ export default function Home() {
                           ⏭️ PYQ step chhod diya — Must/Might/Can skip ke tags syllabus importance
                           se bané hain. Upar papers daal kar kabhi bhi asli trend paa sakte ho.
                         </p>
+                      )}
+
+                      {/* Evidence counted from the actual uploaded papers */}
+                      {(evidence || evidenceLoading || evidenceError || exam.questions.length > 0) && (
+                        <PyqEvidencePanel
+                          evidence={evidence}
+                          loading={evidenceLoading}
+                          error={evidenceError}
+                          progress={evidenceProgress}
+                          onRetry={retryEvidence}
+                          topicTitle={(id) => topics.find((t) => t.id === id)?.title ?? id}
+                          topicUnit={(id) => topics.find((t) => t.id === id)?.chapter ?? "General"}
+                        />
                       )}
                     </div>
                   )}

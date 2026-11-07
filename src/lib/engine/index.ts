@@ -13,6 +13,7 @@ import type {
   PlanResponse,
   QuizResponse,
   SolutionsResponse,
+  SyllabusAnalysis,
   Topic,
   TopicResult,
 } from "@/lib/types";
@@ -31,16 +32,20 @@ import {
 import { buildAnswerRules, buildChatRules, buildSolutionsRules } from "./rules/answers";
 import type { AnswerRulesInput, ChatRulesInput, SolutionPaperInput, SolutionsRulesInput } from "./rules/answers";
 import { buildExamPlanRules } from "./rules/examplan";
+import { buildPyqEvidence } from "./rules/evidence";
+import type { PyqEvidenceInput } from "./rules/evidence";
 import { buildFullNotesRules, buildTopicNotesRules } from "./rules/notes";
 import { buildPlanRules, daysToMarkdown } from "./rules/plan";
 import type { PlanPick, PlanRulesInput } from "./rules/plan";
 import { mapQuestionsToTopics, parsePapersRules } from "./rules/pyq";
 import type { ParsePapersRulesInput } from "./rules/pyq";
+import { buildSmartPriority } from "./rules/priority";
+import type { SmartPriorityInput } from "./rules/priority";
 import { buildMockTestRules, buildQuizRules } from "./rules/quiz";
 import type { BuildMockTestRulesInput, QuizTopicInput } from "./rules/quiz";
 import { buildSearchLinks } from "./rules/search";
 import type { SearchLinksInput } from "./rules/search";
-import { analyzeSyllabusRules, autoMaxTopics } from "./rules/syllabus";
+import { analyzeSyllabusFull, analyzeSyllabusRules, syllabusToTopics } from "./rules/syllabus";
 
 /**
  * The single entry point every component talks to.
@@ -76,25 +81,38 @@ const WAIT = {
 export interface AnalyzeInput {
   syllabus: string;
   subject?: string;
-  maxTopics?: number;
 }
 
+/**
+ * The syllabus structure is ALWAYS parsed by the deterministic rules engine.
+ *
+ * Phase 4's contract — uncapped extraction, preserved hierarchy, exact-only
+ * dedupe and honest "unclear" marking — needs an auditable parser, and every
+ * surface must show identical counts. A small browser model can rewrite
+ * wording elsewhere (notes, answers, solutions) but never this structure.
+ */
 export async function analyzeSyllabus(input: AnalyzeInput): Promise<AnalyzeResponse> {
-  const maxTopics = input.maxTopics ?? autoMaxTopics(input.syllabus ?? "");
-  const rules = () => analyzeSyllabusRules({ ...input, maxTopics });
-
-  const { value } = await withAi(
-    async () => {
-      const result = await import("./ai").then((m) =>
-        m.analyzeSyllabusAi({ ...input, maxTopics }),
-      );
-      return result;
-    },
-    rules,
-    { waitMs: WAIT.structural },
-  );
-  return value.ok ? value : rules();
+  return analyzeSyllabusRules(input);
 }
+
+/** Complete unit → topic → subtopic structure, straight from the rules. */
+export function analyzeFullSyllabus(input: AnalyzeInput): SyllabusAnalysis {
+  return analyzeSyllabusFull(input);
+}
+
+export { syllabusToTopics };
+
+/* -------------------------------------------------------------------------- */
+/*                            1b · PYQ evidence + priority                      */
+/* -------------------------------------------------------------------------- */
+
+/** Everything counted from the uploaded papers (repeats, frequencies…). */
+export { buildPyqEvidence };
+export type { PyqEvidenceInput };
+
+/** High / Medium / Low labels with the evidence behind each one. */
+export { buildSmartPriority };
+export type { SmartPriorityInput };
 
 /* -------------------------------------------------------------------------- */
 /*                               2 · past papers                                */
