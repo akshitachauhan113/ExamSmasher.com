@@ -15,7 +15,7 @@ export function youtubeSearchUrl(query: string): string {
 }
 
 /** Short language hint appended to a query ("in Hindi", "Hinglish"). */
-function languageHint(code: string): string {
+export function languageHint(code: string): string {
   const lang = LANGUAGES.find((l) => l.code === code);
   if (!lang || lang.code === "en") return "";
   if (lang.code === "hinglish") return "Hinglish";

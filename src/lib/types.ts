@@ -417,6 +417,59 @@ export interface SmartPriorityResult {
   error?: string;
 }
 
+/* --------------------- Phase 5 · video recommendations --------------------- */
+
+export type RecommendationMode = "complete" | "smart";
+export type RecommendationKind = "unit" | "topic";
+
+/**
+ * ONE honest YouTube search suggestion covering several syllabus topics.
+ *
+ * There is no video here — no title, channel, thumbnail, duration or URL of
+ * any actual video. `query` is what we would search for, `url` opens
+ * YouTube's own results page, and `topicIds` are the topics the student is
+ * EXPECTED to cover with whichever lecture they pick. Nothing more is claimed.
+ */
+export interface VideoRecommendation {
+  /** Stable across rebuilds — doubles as the watched-progress key. */
+  id: string;
+  kind: RecommendationKind;
+  /** Honest card heading ("Unit lecture search — Unit III: Calculus"). */
+  title: string;
+  /** Short chip: "Full unit lecture" / "Full lecture" / "Priority lecture". */
+  label: string;
+  /** The query we built from the syllabus wording. */
+  query: string;
+  /** https://www.youtube.com/results?search_query=… */
+  url: string;
+  /** Unit (chapter) this recommendation belongs to. */
+  unit: string;
+  /** Topics this search is INTENDED to cover — student ticks each one. */
+  topicIds: string[];
+  /** Smart mode only — the priority class this group serves. */
+  priority?: SmartPriority;
+}
+
+export interface NoRecReason {
+  topicId: string;
+  /** Why no search suggestion could honestly be built for this topic. */
+  reason: string;
+}
+
+export interface RecommendationPlan {
+  ok: boolean;
+  mode: RecommendationMode;
+  /** Ordered: syllabus order (complete), High → Low (smart). */
+  recommendations: VideoRecommendation[];
+  /** Topics with NO recommendation — listed, never silently dropped. */
+  noRec: NoRecReason[];
+  /** Topics skipped because the student already marked them studied. */
+  studiedTopicIds: string[];
+  notes: string[];
+  /** Inputs fingerprint — lets a reload reuse the cached plan. */
+  signature: string;
+}
+
 /** One MCQ in a generated quiz. */
 export interface QuizQuestion {
   id: string;

@@ -27,6 +27,7 @@ import { TopicAccordion, unitKeyOf } from "@/components/TopicAccordion";
 import { PlaylistBoard, type PlaylistTab } from "@/components/PlaylistBoard";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { StudySpacePanel } from "@/components/StudySpacePanel";
+import { usePlaylistProgress } from "@/hooks/usePlaylistProgress";
 import { useStudiedTopics } from "@/hooks/useStudiedTopics";
 import { primeBrowserAi } from "@/lib/ai/run";
 import {
@@ -38,6 +39,7 @@ import {
   topicSearches,
 } from "@/lib/engine";
 import { clearAnalysis, loadAnalysis, saveAnalysis } from "@/lib/analysisCache";
+import { planForRecommendations, clearCachedRecommendations } from "@/lib/recommendCache";
 import { buildCsv, buildMarkdown, copyText, downloadFile } from "@/lib/exporters";
 import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
 import type {
@@ -148,6 +150,9 @@ export default function Home() {
   const studiedApi = useStudiedTopics();
   const { isStudied, toggle: toggleStudied, clearAll: clearStudied } = studiedApi;
 
+  /** Phase 5 · which topics are covered / which searches were watched. */
+  const playlistProgress = usePlaylistProgress();
+
   const notify = useCallback((message: string) => {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -252,6 +257,52 @@ export default function Home() {
   const priority = useMemo<SmartPriorityResult>(
     () => buildSmartPriority({ topics, plan: exam.plan }),
     [topics, exam.plan],
+  );
+
+  /* ------------------ Phase 5 · video recommendations (playlists) ------------------ */
+
+  /** Subtopics per topic id — walked in the SAME order syllabusToTopics used
+   *  (both derive from this analysis), so ids always line up. */
+  const subtopicsByTopicId = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    if (!syllabusAnalysis) return map;
+    let index = 0;
+    for (const unit of syllabusAnalysis.units) {
+      for (const entry of unit.topics) {
+        const topic = topics[index];
+        index += 1;
+        if (topic && entry.subtopics.length > 0) map[topic.id] = entry.subtopics;
+      }
+    }
+    return map;
+  }, [syllabusAnalysis, topics]);
+
+  /** The two playlist plans — deterministic, cached, rebuilt only when the
+   *  syllabus / priority / language / study progress actually change. */
+  const completePlan = useMemo(
+    () =>
+      planForRecommendations({
+        mode: "complete",
+        topics,
+        priority,
+        subject: subjectName,
+        language,
+        isStudied,
+      }),
+    [topics, priority, subjectName, language, isStudied],
+  );
+
+  const smartPlan = useMemo(
+    () =>
+      planForRecommendations({
+        mode: "smart",
+        topics,
+        priority,
+        subject: subjectName,
+        language,
+        isStudied,
+      }),
+    [topics, priority, subjectName, language, isStudied],
   );
 
   /** Signature of the exact inputs the evidence is counted from. */
@@ -610,6 +661,7 @@ export default function Home() {
     setExpandedUnits(new Set());
     // "Start over" also forgets the cached analysis — next load starts clean.
     clearAnalysis();
+    clearCachedRecommendations();
   }, []);
 
   /* ----------------------- analysis cache (Phase 4) ----------------------- */
@@ -1016,10 +1068,12 @@ export default function Home() {
   const playlistBoard = (
     <PlaylistBoard
       topics={topics}
-      priorityTopics={displayTopics}
-      results={results}
+      subtopicsByTopicId={subtopicsByTopicId}
       bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
-      plan={exam.plan}
+      priority={priority}
+      completePlan={completePlan}
+      smartPlan={smartPlan}
+      progress={playlistProgress}
       active={playlistTab}
       onChange={setPlaylistTab}
       onJump={jumpTo}
@@ -1146,6 +1200,7 @@ export default function Home() {
                       onDownloadCsv={handleDownloadCsv}
                       onResetProgress={() => {
                         clearStudied();
+                        playlistProgress.clearAll();
                         notify("Progress reset — sab topics dobara pending.");
                       }}
                       onGeneratePlan={generatePlan}
@@ -1167,6 +1222,7 @@ export default function Home() {
                           isStudied={isStudied}
                           onResetProgress={() => {
                             clearStudied();
+                            playlistProgress.clearAll();
                             notify("Progress reset — sab topics dobara pending.");
                           }}
                         />
