@@ -10,6 +10,10 @@ interface FeatureCard {
   title: string;
   body: string;
   Icon: typeof FileUp;
+  /** Signature colour for this card's wash, watermark and icon tile. */
+  tint: string;
+  /** Gradient used for the icon tile (kept readable behind white glyphs). */
+  grad: string;
 }
 
 /**
@@ -22,24 +26,32 @@ const FEATURES: FeatureCard[] = [
     title: "Upload Syllabus",
     body: "PDF, photo ya text — topics khud ban jayenge.",
     Icon: FileUp,
+    tint: "#ec4899",
+    grad: "linear-gradient(135deg, #ec4899, #ff7a59)",
   },
   {
     id: "pyq",
     title: "Upload PYQs",
     body: "Purane papers se Must / Might / Can skip ka tag.",
     Icon: ClipboardList,
+    tint: "#8b5cf6",
+    grad: "linear-gradient(135deg, #8b5cf6, #6366f1)",
   },
   {
     id: "complete",
     title: "Complete Syllabus Playlist",
     body: "Poore syllabus ke search links, unit by unit.",
     Icon: ListVideo,
+    tint: "#f59e0b",
+    grad: "linear-gradient(135deg, #f59e0b, #f97316)",
   },
   {
     id: "smart",
     title: "Smart Exam Preparation",
     body: "Exam trend se priority order aur study plan.",
     Icon: Target,
+    tint: "#10b981",
+    grad: "linear-gradient(135deg, #10b981, #06b6d4)",
   },
 ];
 
@@ -77,12 +89,15 @@ export function HeroDashboard({ onAction, onSpace }: HeroDashboardProps) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {FEATURES.map(({ id, title, body, Icon }) => (
+        {FEATURES.map(({ id, title, body, Icon, tint, grad }) => (
           <button
             key={id}
             type="button"
             onClick={() => onAction(id)}
             className="card group relative overflow-hidden p-4 text-left transition-shadow hover:shadow-[var(--shadow-card)]"
+            style={{
+              background: `radial-gradient(120% 90% at 100% 0%, ${tint}1f, transparent 55%), var(--surface)`,
+            }}
           >
             {/* Subtle background illustration — same icon, big and faint. */}
             <Icon
@@ -91,11 +106,11 @@ export function HeroDashboard({ onAction, onSpace }: HeroDashboardProps) {
               strokeWidth={1.5}
               aria-hidden
               className="pointer-events-none absolute -bottom-4 -right-3 opacity-[0.06] transition-opacity group-hover:opacity-[0.11]"
-              style={{ color: "var(--brand)" }}
+              style={{ color: tint }}
             />
             <span
               className="mb-2.5 grid h-9 w-9 place-items-center rounded-xl text-white"
-              style={{ background: "linear-gradient(135deg, var(--brand), var(--brand-2))" }}
+              style={{ background: grad }}
             >
               <Icon width={18} height={18} strokeWidth={2.2} />
             </span>

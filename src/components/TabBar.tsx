@@ -38,9 +38,9 @@ export function TabBar({ tabs, active, onChange, ariaLabel }: TabBarProps) {
             style={
               isActive
                 ? {
-                    background: "color-mix(in srgb, var(--brand) 12%, transparent)",
-                    color: "var(--brand)",
-                    boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent)",
+                    background: "linear-gradient(135deg, #db2777, #9333ea)",
+                    color: "#fff",
+                    boxShadow: "0 8px 18px -8px rgba(219, 39, 119, 0.55)",
                   }
                 : { background: "var(--surface-2)", color: "var(--muted)" }
             }
@@ -50,10 +50,8 @@ export function TabBar({ tabs, active, onChange, ariaLabel }: TabBarProps) {
               <span
                 className="rounded-md px-1.5 py-0.5 text-[0.62rem] font-extrabold"
                 style={{
-                  background: isActive
-                    ? "color-mix(in srgb, var(--brand) 18%, transparent)"
-                    : "var(--surface)",
-                  color: isActive ? "var(--brand)" : "var(--muted)",
+                  background: isActive ? "rgba(255, 255, 255, 0.26)" : "var(--surface)",
+                  color: isActive ? "#fff" : "var(--muted)",
                 }}
               >
                 {tab.badge}

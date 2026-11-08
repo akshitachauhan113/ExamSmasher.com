@@ -14,42 +14,42 @@
   --color-warn: var(--warn);
   --color-bad: var(--bad);
   --color-gold: var(--gold);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-round);
   --font-mono: var(--font-geist-mono);
 }
 
 :root {
-  --bg: #f5f6fb;
+  --bg: #fff6fb;
   --surface: #ffffff;
-  --surface-2: #f0f2f9;
-  --line: #e3e7f1;
-  --text: #0d1220;
-  --muted: #5d6883;
-  --brand: #4f46e5;
+  --surface-2: #fdeef7;
+  --line: #f7d9ea;
+  --text: #271637;
+  --muted: #745c82;
+  --brand: #db2777;
   --brand-2: #9333ea;
-  --accent: #0891b2;
+  --accent: #ff7a59;
   --good: #0f9d58;
   --warn: #d97706;
   --bad: #dc2626;
   --gold: #f59e0b;
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -12px rgba(16, 24, 40, 0.14);
+  --shadow-card: 0 1px 2px rgba(190, 60, 130, 0.05), 0 10px 28px -14px rgba(190, 60, 130, 0.3);
 }
 
 [data-theme="dark"] {
-  --bg: #080b14;
-  --surface: #0f1424;
-  --surface-2: #161c30;
-  --line: #232b42;
-  --text: #e9edf8;
-  --muted: #97a2bd;
-  --brand: #6d63ff;
-  --brand-2: #b16bff;
-  --accent: #22d3ee;
+  --bg: #150c21;
+  --surface: #1e1233;
+  --surface-2: #2a1a45;
+  --line: #402a5f;
+  --text: #f7eefc;
+  --muted: #bda7d0;
+  --brand: #ff7ab8;
+  --brand-2: #c084fc;
+  --accent: #ffa06b;
   --good: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
   --gold: #fbbf24;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -16px rgba(0, 0, 0, 0.8);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px -16px rgba(160, 60, 200, 0.55);
 }
 
 html {
@@ -58,10 +58,25 @@ html {
 }
 
 body {
-  background: var(--bg);
+  /* Soft candy backdrop — pink → violet → peach washes over the base tone. */
+  background:
+    radial-gradient(1100px 520px at 8% -12%, #ffe3f1 0%, rgba(255, 227, 241, 0) 60%),
+    radial-gradient(950px 500px at 105% -5%, #efe2ff 0%, rgba(239, 226, 255, 0) 58%),
+    radial-gradient(1000px 650px at 50% 115%, #ffedd9 0%, rgba(255, 237, 217, 0) 60%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-round), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="dark"] body {
+  background:
+    radial-gradient(1100px 520px at 8% -12%, rgba(255, 91, 165, 0.16) 0%, transparent 60%),
+    radial-gradient(950px 500px at 105% -5%, rgba(157, 100, 255, 0.16) 0%, transparent 58%),
+    radial-gradient(1000px 650px at 50% 115%, rgba(255, 160, 92, 0.1) 0%, transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
 }
 
 ::selection {
@@ -73,7 +88,7 @@ body {
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 22px;
   box-shadow: var(--shadow-card);
 }
 
@@ -84,10 +99,10 @@ body {
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.5rem;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--line));
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface));
   color: var(--muted);
   white-space: nowrap;
 }
@@ -95,10 +110,10 @@ body {
 .btn-primary {
   background: linear-gradient(120deg, var(--brand), var(--brand-2));
   color: #fff;
-  border-radius: 14px;
-  font-weight: 700;
+  border-radius: 999px;
+  font-weight: 800;
   transition: filter 0.18s ease, transform 0.18s ease;
-  box-shadow: 0 10px 26px -12px color-mix(in srgb, var(--brand) 85%, transparent);
+  box-shadow: 0 12px 26px -12px color-mix(in srgb, var(--brand) 90%, transparent);
 }
 .btn-primary:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -108,13 +123,18 @@ body {
   opacity: 0.55;
   cursor: not-allowed;
 }
+/* Dark mode's vivid pink is too light behind white label text — use the
+   deeper candy stops there so button labels keep their contrast. */
+[data-theme="dark"] .btn-primary {
+  background: linear-gradient(120deg, #db2777, #7e22ce);
+}
 
 .btn-ghost {
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text);
-  border-radius: 12px;
-  font-weight: 600;
+  border-radius: 999px;
+  font-weight: 700;
   transition: background 0.18s ease, border-color 0.18s ease;
 }
 .btn-ghost:hover:not(:disabled) {
