@@ -20,6 +20,8 @@ import {
   uploadKey,
   validateUpload,
 } from "@/lib/files";
+import { extractText } from "@/lib/extractCache";
+import type { ExamState, PendingPaper } from "@/lib/examState";
 import type {
   EngineSource,
   ExamPlanResponse,
@@ -49,29 +51,8 @@ interface ExamModeProps {
   onOpenSpace?: () => void;
 }
 
-/** Everything Exam Mode produces. Owned by the page, edited by this panel. */
-export interface ExamState {
-  papers: PendingPaper[];
-  questions: PyqQuestion[];
-  parsedPapers: PyqPaper[];
-  plan: ExamPlanResponse | null;
-}
-
-export const EMPTY_EXAM_STATE: ExamState = {
-  papers: [],
-  questions: [],
-  parsedPapers: [],
-  plan: null,
-};
-
-/** One uploaded paper, already read into text, waiting to be parsed. */
-export interface PendingPaper {
-  id: string;
-  year: string;
-  label: string;
-  fileName: string;
-  text: string;
-}
+/** Exam state (papers / questions / parsed papers / plan) lives in @/lib/examState —
+ *  the page owns it, and this panel is only ever loaded on demand. */
 
 interface ExtractResponse {
   ok: boolean;
@@ -196,17 +177,24 @@ export function ExamMode({
         }
         setExtracting(`${read + 1}/${targets.length} · ${file.name}`);
         try {
-          const payload = kindFromName(file.name) === "image" ? await shrinkImage(file) : file;
-          if (payload.size > MAX_UPLOAD_BYTES) {
-            throw new Error("4 MB se bada hai — compress karke dobara try karo.");
-          }
-          const form = new FormData();
-          form.append("file", payload, payload.name);
-          const response = await fetch("/api/extract", { method: "POST", body: form });
-          const data: ExtractResponse = await response.json();
-          if (!data.ok || !data.text) {
-            throw new Error(data.error || "Could not read that file.");
-          }
+          // Content-addressed cache: the SAME bytes are never OCR'd or parsed
+          // twice — a re-add, a refresh or a cross-flow upload returns the
+          // remembered text instantly. Failures are never cached, so a retry
+          // still reaches the server.
+          const text = await extractText(file, async () => {
+            const payload = kindFromName(file.name) === "image" ? await shrinkImage(file) : file;
+            if (payload.size > MAX_UPLOAD_BYTES) {
+              throw new Error("4 MB se bada hai — compress karke dobara try karo.");
+            }
+            const form = new FormData();
+            form.append("file", payload, payload.name);
+            const response = await fetch("/api/extract", { method: "POST", body: form });
+            const data: ExtractResponse = await response.json();
+            if (!data.ok || !data.text) {
+              throw new Error(data.error || "Could not read that file.");
+            }
+            return data.text;
+          });
 
           read += 1;
           currentPapers = [
@@ -218,7 +206,7 @@ export function ExamMode({
               // same year must never merge) and shows which file is which.
               label: file.name.replace(/\.[^.]+$/, "") || "Question paper",
               fileName: file.name,
-              text: data.text,
+              text,
             },
           ];
           // A new paper invalidates the old trend — the student re-reads +

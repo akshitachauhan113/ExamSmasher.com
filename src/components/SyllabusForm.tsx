@@ -1,20 +1,21 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { LANGUAGES } from "@/lib/languages";
 import { FileDropzone } from "./FileDropzone";
 import { AlertIcon, GlobeIcon, PlayIcon, RefreshIcon, SearchIcon } from "./Icons";
 
 interface SyllabusFormProps {
   syllabus: string;
-  onSyllabusChange: (value: string) => void;
   subject: string;
   onSubjectChange: (value: string) => void;
   language: string;
   onLanguageChange: (value: string) => void;
   perTopic: number;
   onPerTopicChange: (value: number) => void;
-  onStart: () => void;
+  /** Starts the analysis with the CURRENT textarea text (passed directly —
+   *  typing itself never lifts state to the page). */
+  onStart: (text: string) => void;
   onReset: () => void;
   onLoadSample: () => void;
   /** Called when an uploaded file's text has been extracted. */
@@ -71,7 +72,6 @@ function Group({
 export function SyllabusForm(props: SyllabusFormProps) {
   const {
     syllabus,
-    onSyllabusChange,
     subject,
     onSubjectChange,
     language,
@@ -89,7 +89,19 @@ export function SyllabusForm(props: SyllabusFormProps) {
     error,
   } = props;
 
-  const tooLong = syllabus.length > MAX_CHARS;
+  // Typing buffer: the textarea holds its own text so every keystroke only
+  // re-renders this form, not the whole page. The page's copy is adopted from
+  // OUTSIDE (file extraction, sample, restore) by adjusting during render —
+  // the documented alternative to a synchronizing effect — and the current
+  // text travels to the page directly when Analyse is pressed.
+  const [text, setText] = useState(syllabus);
+  const [prevSyllabus, setPrevSyllabus] = useState(syllabus);
+  if (syllabus !== prevSyllabus) {
+    setPrevSyllabus(syllabus);
+    setText(syllabus);
+  }
+
+  const tooLong = text.length > MAX_CHARS;
 
   return (
     <section className="card animate-fade-up p-5 sm:p-6">
@@ -122,12 +134,12 @@ export function SyllabusForm(props: SyllabusFormProps) {
                 className="font-mono text-xs font-normal"
                 style={{ color: tooLong ? "var(--bad)" : "var(--muted)" }}
               >
-                {syllabus.length}/{MAX_CHARS}
+                {text.length}/{MAX_CHARS}
               </span>
             </span>
             <textarea
-              value={syllabus}
-              onChange={(e) => onSyllabusChange(e.target.value)}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
               rows={9}
               aria-label="Syllabus text"
               placeholder={`Unit-I: Relations and Functions\n1. Types of relations, equivalence relations, one-one and onto functions…\n\nUnit-II: Algebra\n2. Matrices, determinants…`}
@@ -208,8 +220,8 @@ export function SyllabusForm(props: SyllabusFormProps) {
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          onClick={onStart}
-          disabled={busy || tooLong || syllabus.trim().length < 20}
+          onClick={() => onStart(text)}
+          disabled={busy || tooLong || text.trim().length < 20}
           className="btn-primary flex items-center gap-2 px-5 py-3 text-sm"
         >
           {busy ? (

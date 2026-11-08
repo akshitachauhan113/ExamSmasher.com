@@ -1,18 +1,16 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 
 import { CheckIcon, GraduationIcon } from "@/components/Icons";
 import { AiStatusChip } from "@/components/AiStatusChip";
 import { ChatWidget } from "@/components/ChatWidget";
-import { ExamMode, EMPTY_EXAM_STATE, type ExamState } from "@/components/ExamMode";
 import { CompleteSyllabusPanel } from "@/components/CompleteSyllabusPanel";
 import { SmartExamPanel } from "@/components/SmartExamPanel";
 import { PyqEvidencePanel } from "@/components/PyqEvidencePanel";
-import { StudyPlanModal } from "@/components/StudyPlanModal";
 import { SyllabusForm } from "@/components/SyllabusForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { TodoPanel } from "@/components/TodoPanel";
 import { TopicPanel } from "@/components/TopicPanel";
 import { TopicSidebar } from "@/components/TopicSidebar";
 import { BottomNav, SiteNav, type AppView } from "@/components/SiteNav";
@@ -26,7 +24,6 @@ import { OverviewPanel } from "@/components/OverviewPanel";
 import { TopicAccordion, unitKeyOf } from "@/components/TopicAccordion";
 import { PlaylistBoard, type PlaylistTab } from "@/components/PlaylistBoard";
 import { SettingsPanel } from "@/components/SettingsPanel";
-import { StudySpacePanel } from "@/components/StudySpacePanel";
 import { usePlaylistProgress } from "@/hooks/usePlaylistProgress";
 import { useStudiedTopics } from "@/hooks/useStudiedTopics";
 import { primeBrowserAi } from "@/lib/ai/run";
@@ -39,6 +36,7 @@ import {
   topicSearches,
 } from "@/lib/engine";
 import { clearAnalysis, loadAnalysis, saveAnalysis } from "@/lib/analysisCache";
+import { EMPTY_EXAM_STATE, type ExamState } from "@/lib/examState";
 import { planForRecommendations, clearCachedRecommendations } from "@/lib/recommendCache";
 import { buildCsv, buildMarkdown, copyText, downloadFile } from "@/lib/exporters";
 import { SAMPLE_SUBJECT, SAMPLE_SYLLABUS } from "@/lib/sample";
@@ -53,6 +51,29 @@ import type {
   Topic,
   TopicResult,
 } from "@/lib/types";
+
+/**
+ * Heavy, interaction-only views: each loads as its own chunk the first time
+ * the student opens it (PYQ tab, My Study Space, the plan modal, the to-do
+ * panel), so the first paint never downloads the whole app. `loading` keeps
+ * the boundary silent — every open completes in a few milliseconds.
+ */
+const ExamMode = dynamic(
+  () => import("@/components/ExamMode").then((mod) => mod.ExamMode),
+  { loading: () => null },
+);
+const StudySpacePanel = dynamic(
+  () => import("@/components/StudySpacePanel").then((mod) => mod.StudySpacePanel),
+  { loading: () => null },
+);
+const StudyPlanModal = dynamic(
+  () => import("@/components/StudyPlanModal").then((mod) => mod.StudyPlanModal),
+  { loading: () => null },
+);
+const TodoPanel = dynamic(
+  () => import("@/components/TodoPanel").then((mod) => mod.TodoPanel),
+  { loading: () => null },
+);
 
 type Phase = "idle" | "analyzing" | "papers" | "matching" | "done";
 /** Which analysis tab the student is reading. */
@@ -456,15 +477,19 @@ export default function Home() {
   }, [beginVideoSearch, notify]);
 
   /* ------------------------------ analyse ------------------------------- */
-  const startAnalysis = useCallback(async () => {
-    if (syllabus.trim().length < 20) {
+  const startAnalysis = useCallback(async (text: string) => {
+    if (text.trim().length < 20) {
       setFormError("Paste at least a few lines of your syllabus so topics can be extracted.");
       return;
     }
-    if (syllabus.length > 24000) {
+    if (text.length > 24000) {
       setFormError("Syllabus is too long — trim it under 24,000 characters.");
       return;
     }
+
+    // The form passes its LIVE text (typing no longer re-renders the page),
+    // so adopt it here — everything downstream sees exactly what analysed.
+    setSyllabus(text);
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -495,7 +520,7 @@ export default function Home() {
 
       // The deterministic full parser: uncapped, hierarchy-preserving,
       // exact-only dedupe, unclear lines reported instead of guessed.
-      const full = analyzeFullSyllabus({ syllabus, subject });
+      const full = analyzeFullSyllabus({ syllabus: text, subject });
       if (!full.ok || full.totalTopics === 0) {
         throw new Error(full.error || "Could not extract topics from this syllabus.");
       }
@@ -530,7 +555,7 @@ export default function Home() {
     } finally {
       setStage(null);
     }
-  }, [syllabus, subject, setExam, notify]);
+  }, [subject, setExam, notify]);
 
   /** Builds search links for a single topic (used when a topic is un-ticked). */
   const matchTopic = useCallback(
@@ -1122,7 +1147,6 @@ export default function Home() {
             <div id="syllabus-form" className="scroll-mt-24">
               <SyllabusForm
                 syllabus={syllabus}
-                onSyllabusChange={setSyllabus}
                 subject={subject}
                 onSubjectChange={setSubject}
                 language={language}

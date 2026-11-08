@@ -11,6 +11,7 @@ import {
   validateUpload,
   type FileKind,
 } from "@/lib/files";
+import { hashFile, readCachedText, rememberText } from "@/lib/extractCache";
 import { AlertIcon, CheckIcon, CloseIcon, UploadIcon } from "./Icons";
 
 interface FileDropzoneProps {
@@ -166,20 +167,45 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
           bytes += list[i].file.size;
         }
         const targets = group.length > 0 ? group : [list[start]];
-        const targetIds = targets.map((t) => t.id);
 
-        update(targetIds, { status: "reading", error: undefined });
+        // Content-addressed cache (Phase 6): bytes that were already read —
+        // this session or a previous one — finish instantly, with no shrink
+        // and no OCR. Only files the cache has never seen reach the server.
+        const hashes = new Map<string, string>();
+        const misses: Entry[] = [];
+        let hits = 0;
+        for (const target of targets) {
+          const hash = await hashFile(target.file);
+          hashes.set(target.id, hash);
+          const cached = readCachedText(hash);
+          if (cached !== null) {
+            update([target.id], {
+              status: "done",
+              text: cached,
+              error: undefined,
+              retryable: false,
+            });
+            hits += 1;
+          } else {
+            misses.push(target);
+          }
+        }
+        if (hits > 0) pushCombined(entriesRef.current, true);
+        if (misses.length === 0) continue;
+
+        const missIds = misses.map((t) => t.id);
+        update(missIds, { status: "reading", error: undefined });
         setReadingLabel(
-          targets.length > 1
-            ? `Reading ${targets.length} photos…`
-            : `Reading ${targets[0].name}…`,
+          misses.length > 1
+            ? `Reading ${misses.length} photos…`
+            : `Reading ${misses[0].name}…`,
         );
 
         try {
           // Oversized photos are shrunk first; anything still too big fails
           // on its own without blocking the other files.
-          const ready: Array<{ entry: Entry; payload: File }> = [];
-          for (const target of targets) {
+          const ready: Array<{ entry: Entry; payload: File; hash: string }> = [];
+          for (const target of misses) {
             const payload =
               target.kind === "image" ? await shrinkImage(target.file) : target.file;
             if (payload.size > MAX_UPLOAD_BYTES) {
@@ -189,7 +215,7 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
                 retryable: false,
               });
             } else {
-              ready.push({ entry: target, payload });
+              ready.push({ entry: target, payload, hash: hashes.get(target.id) ?? "" });
             }
           }
           if (ready.length === 0) continue;
@@ -222,9 +248,11 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
                   retryable: true,
                 });
               } else {
+                const text = result?.text ?? data.text;
+                if (item.hash && text) rememberText(item.hash, text);
                 update([item.entry.id], {
                   status: "done",
-                  text: result?.text ?? data.text,
+                  text,
                   error: undefined,
                   retryable: false,
                 });
@@ -247,10 +275,10 @@ export function FileDropzone({ onExtracted, onError, disabled }: FileDropzonePro
           }
         } catch (err) {
           if (isAbort(err)) {
-            update(targetIds, { status: "queued" }); // cancel = pause, not lose
+            update(missIds, { status: "queued" }); // cancel = pause, not lose
             break;
           }
-          update(targetIds, {
+          update(missIds, {
             status: "error",
             error: errorText(err),
             retryable: true,

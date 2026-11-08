@@ -6,7 +6,7 @@ import type {
   SyllabusAnalysis,
   Topic,
 } from "@/lib/types";
-import type { ExamState } from "@/components/ExamMode";
+import type { ExamState } from "@/lib/examState";
 
 /**
  * Persists one analysed syllabus (and its PYQ state) so a refresh never
