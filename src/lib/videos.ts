@@ -75,6 +75,8 @@ export function tokens(text: string): string[] {
 export interface SyllabusTopicInput {
   title: string;
   keywords: string[];
+  /** Subtopics — matched too, so "topic AND subtopic" phrasing counts. */
+  subtopics?: string[];
 }
 
 export interface CoverageEstimate {
@@ -84,13 +86,24 @@ export interface CoverageEstimate {
   matched: string[];
 }
 
+/** True when ≥60 % (min 1) of `needles` appear in `haystack`. */
+function wordsPresent(haystack: Set<string>, needles: string[]): boolean {
+  if (needles.length === 0) return false;
+  const need = Math.max(1, Math.ceil(needles.length * 0.6));
+  let hit = 0;
+  for (const token of needles) if (haystack.has(token)) hit += 1;
+  return hit >= need;
+}
+
 /**
  * How much of the student's syllabus a video's title + description mention.
  *
  * A topic counts as covered when at least 60 % (min 1) of its significant
  * words appear in the video text — strict enough that a stray word in a
  * description cannot claim a topic, loose enough for titles that rephrase.
- * Topics with no searchable word are never claimed.
+ * A SUBTOPIC the video spells out counts as evidence for its parent topic
+ * (the student asked for topic-and-subtopic matching), and topics with no
+ * searchable word anywhere are never claimed.
  *
  * This is an ESTIMATE from text; the UI always labels it as one.
  */
@@ -103,11 +116,12 @@ export function coverageEstimate(
   const matched: string[] = [];
   for (const topic of topics) {
     const topicTokens = tokens(`${topic.title} ${topic.keywords.join(" ")}`);
-    if (topicTokens.length === 0) continue;
-    const need = Math.max(1, Math.ceil(topicTokens.length * 0.6));
-    let hit = 0;
-    for (const token of topicTokens) if (videoTokens.has(token)) hit += 1;
-    if (hit >= need) matched.push(topic.title);
+    const subtopics = topic.subtopics ?? [];
+    if (topicTokens.length === 0 && subtopics.length === 0) continue;
+    const covered =
+      wordsPresent(videoTokens, topicTokens) ||
+      subtopics.some((sub) => wordsPresent(videoTokens, tokens(sub)));
+    if (covered) matched.push(topic.title);
   }
   return { pct: Math.round((matched.length / topics.length) * 100), matched };
 }

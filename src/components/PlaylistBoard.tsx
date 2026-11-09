@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalIcon } from "@/components/Icons";
 import { TabBar } from "./TabBar";
+import { VideoPlayerModal, type PlayerVideo } from "./VideoPlayerModal";
 import { BAND_LABEL } from "@/lib/exam";
 import { formatDuration, formatViews } from "@/lib/format";
 import { readVideoCache, writeVideoCache } from "@/lib/videoCache";
 import type {
+  CoursePlaylist,
+  CoursePlaylistResponse,
   ExamTopic,
   RecommendationPlan,
   SmartPriority,
@@ -27,6 +30,8 @@ interface PlaylistProgressApi {
 }
 
 interface PlaylistBoardProps {
+  /** Course name from the syllabus — the query base for the full-course playlist lookup. */
+  subject: string;
   /** Every syllabus topic, in syllabus order. */
   topics: Topic[];
   /** Subtopics per topic id (from the full syllabus analysis). */
@@ -84,12 +89,17 @@ function apiReasonLabel(reason?: string): string {
  * lectures, maximum coverage). The server resolves that search into REAL
  * YouTube videos (title/channel/duration/views/thumbnail, never fabricated)
  * and estimates how much of the student's syllabus each one mentions from
- * its title + description — an ESTIMATE the UI labels as one. When the API
- * cannot answer (key, quota, network), the card falls back to the honest
- * search link and says so. Coverage only grows from the student's own
- * ticks: a generated link never counts as "covered".
+ * its title + description (+ subtopics) — an ESTIMATE the UI labels as one.
+ * A video is only ever shown on ONE card (plan order wins), every video can
+ * be previewed in-app before the student commits to watching it, and the
+ * Complete tab additionally offers an EXISTING full-course playlist when one
+ * genuinely covers the syllabus. When the API cannot answer (key, quota,
+ * network), the card falls back to the honest search link and says so.
+ * Coverage only grows from the student's own ticks: a generated link never
+ * counts as "covered".
  */
 export function PlaylistBoard({
+  subject,
   topics,
   subtopicsByTopicId,
   bandFor,
@@ -124,8 +134,15 @@ export function PlaylistBoard({
     [plan],
   );
   const videoTopics = useMemo(
-    () => topics.map((topic) => ({ title: topic.title, keywords: topic.keywords })),
-    [topics],
+    () =>
+      topics.map((topic) => ({
+        title: topic.title,
+        keywords: topic.keywords,
+        // Subtopics count too — a video that spells one out is evidence the
+        // parent topic is taught there (the coverage chip still says estimate).
+        subtopics: subtopicsByTopicId[topic.id] ?? [],
+      })),
+    [topics, subtopicsByTopicId],
   );
 
   const [videoState, setVideoState] = useState<{
@@ -146,7 +163,7 @@ export function PlaylistBoard({
     const run = async () => {
       const cached = readVideoCache(videoSig);
       if (cached) {
-        setVideoState({ sig: videoSig, status: "ready", byKey: cached });
+        setVideoState({ sig: videoSig, status: "ready", byKey: cached.results, reason: cached.reason });
         return;
       }
 
@@ -157,11 +174,15 @@ export function PlaylistBoard({
       // to its honest search link and says why.
       const BATCH = 10;
       const byKey: Record<string, VideoMatch[]> = {};
+      // Same video must never appear on two cards — the server already
+      // de-duplicates within one request; this covers plans big enough to
+      // span several batches, in plan order.
+      const seenIds = new Set<string>();
       let firstReason: string | undefined;
       let anyOk = false;
       const finishOk = () => {
-        writeVideoCache(videoSig, byKey);
-        setVideoState({ sig: videoSig, status: "ready", byKey });
+        writeVideoCache(videoSig, byKey, firstReason);
+        setVideoState({ sig: videoSig, status: "ready", byKey, reason: firstReason });
       };
       try {
         for (let i = 0; i < videoQueries.length; i += BATCH) {
@@ -179,7 +200,11 @@ export function PlaylistBoard({
           if (controller.signal.aborted) return;
           if (data.ok && data.results) {
             anyOk = true;
-            Object.assign(byKey, data.results);
+            for (const [key, list] of Object.entries(data.results)) {
+              const fresh = (list ?? []).filter((video) => !seenIds.has(video.id));
+              fresh.forEach((video) => seenIds.add(video.id));
+              byKey[key] = fresh;
+            }
           } else if (!firstReason) {
             firstReason = data.reason;
           }
@@ -191,7 +216,7 @@ export function PlaylistBoard({
         if (controller.signal.aborted) return;
         // Network died mid-way — keep whatever real videos already landed.
         if (anyOk) finishOk();
-        else setVideoState({ sig: videoSig, status: "fallback", reason: "network", byKey: {} });
+        else setVideoState({ sig: videoSig, status: "fallback", reason: firstReason ?? "network", byKey: {} });
       }
     };
     void run();
@@ -201,6 +226,65 @@ export function PlaylistBoard({
 
   /** Current state only if it belongs to the signature on screen. */
   const liveVideos = videoState && videoState.sig === videoSig ? videoState : null;
+
+  /* ------------------- full-course playlist (Complete tab) ------------------- */
+
+  /** `${subject}::${topic ids}` — a new syllabus is a new lookup. */
+  const playlistSig = `${subject.trim().toLowerCase()}::${topics.map((t) => t.id).join(",")}`;
+  const [playlistState, setPlaylistState] = useState<{
+    sig: string;
+    status: "loading" | "ready" | "hidden";
+    playlist: CoursePlaylist | null;
+  } | null>(null);
+  /** One lookup per syllabus — never re-fire it on a tab switch. */
+  const playlistAskedRef = useRef("");
+
+  useEffect(() => {
+    if (active !== "complete" || topics.length === 0) return;
+    if (playlistAskedRef.current === playlistSig) return;
+    playlistAskedRef.current = playlistSig;
+    setPlaylistState({ sig: playlistSig, status: "loading", playlist: null });
+
+    // No abort on unmount: the answer (or failure) simply lands under its own
+    // signature, so leaving the tab mid-lookup never strands a spinner.
+    void (async () => {
+      const ask = playlistSig;
+      try {
+        const res = await fetch("/api/playlists", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subject,
+            topics: topics.map((t) => ({ id: t.id, title: t.title, keywords: t.keywords })),
+          }),
+        });
+        const data = (await res.json()) as CoursePlaylistResponse;
+        if (playlistAskedRef.current !== ask) return; // superseded by a new syllabus
+        setPlaylistState({
+          sig: ask,
+          status: data.ok ? "ready" : "hidden",
+          playlist: data.ok ? data.playlist ?? null : null,
+        });
+      } catch {
+        if (playlistAskedRef.current !== ask) return;
+        setPlaylistState({ sig: ask, status: "hidden", playlist: null });
+      }
+    })();
+  }, [active, playlistSig, subject, topics]);
+
+  /** The banner only ever shows for the syllabus that is on screen. */
+  const coursePlaylist =
+    active === "complete" &&
+    playlistState &&
+    playlistState.sig === playlistSig &&
+    playlistState.status === "ready"
+      ? playlistState.playlist
+      : null;
+
+  /** In-app preview — the student watches without leaving ExamSmasher. */
+  const [preview, setPreview] = useState<PlayerVideo | null>(null);
+  const openPreview = (video: VideoMatch) =>
+    setPreview({ id: video.id, title: video.title, channelTitle: video.channel });
 
   /* ------------------------------ coverage ------------------------------ */
   const coveredCount = useMemo(
@@ -416,6 +500,120 @@ export function PlaylistBoard({
         </div>
       )}
 
+      {/* ------------- full-course playlist (only if it genuinely fits) ------------- */}
+      {coursePlaylist && (
+        <div
+          data-course-playlist="1"
+          className="mt-3 rounded-xl border px-3.5 py-3"
+          style={{
+            borderColor: "color-mix(in srgb, var(--brand) 40%, var(--line))",
+            background: "var(--surface-2)",
+          }}
+        >
+          <div className="flex items-start gap-3">
+            {coursePlaylist.thumbnail && (
+              /* eslint-disable-next-line @next/next/no-img-element -- raw YouTube CDN thumb, same reason as the video rows */
+              <img
+                src={coursePlaylist.thumbnail}
+                alt=""
+                width={120}
+                height={68}
+                loading="lazy"
+                className="hidden h-[68px] w-[120px] shrink-0 rounded-md object-cover sm:block"
+                style={{ background: "var(--surface)" }}
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <p
+                className="text-[0.68rem] font-extrabold uppercase tracking-wide"
+                style={{ color: "var(--brand)" }}
+              >
+                🎬 Full course playlist mili
+              </p>
+              <a
+                href={coursePlaylist.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 block truncate text-sm font-extrabold hover:underline"
+                title={coursePlaylist.title}
+              >
+                {coursePlaylist.title}
+              </a>
+              <p className="mt-0.5 truncate text-[0.7rem] text-[var(--muted)]">
+                {coursePlaylist.channelTitle} · {coursePlaylist.videoCount} videos
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <span
+                  className="chip font-bold"
+                  style={{ color: "var(--brand)" }}
+                  title="Playlist ke video titles ko aapke topics se match karke nikala gaya estimate"
+                >
+                  ≈{coursePlaylist.coveragePercent}% syllabus cover
+                </span>
+                <span
+                  className="chip"
+                  title={coursePlaylist.coverage
+                    .map((c) => topicById.get(c.topicId)?.title ?? c.topicId)
+                    .join(" · ")}
+                >
+                  {coursePlaylist.coverage.length}/{topics.length} topics
+                </span>
+              </div>
+              <p className="mt-1.5 text-[0.68rem] leading-relaxed text-[var(--muted)]">
+                Ek he playlist me aapka syllabus cover hota dikh raha hai — video KE TITLES aapke
+                topics se match hue, isliye ye bhi ek{" "}
+                <b style={{ color: "var(--warn)" }}>estimate</b> hai. Khud playlist kholke confirm
+                karo; niche topic-wise map hai. Single videos tab bhi neeche hi hain.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  href={coursePlaylist.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 text-[0.72rem]"
+                >
+                  Playlist YouTube par kholo <ExternalIcon width={12} height={12} />
+                </a>
+              </div>
+            </div>
+          </div>
+
+          {coursePlaylist.coverage.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[0.72rem] font-bold">
+                Ye playlist kaise cover karti hai — topic-wise map ({coursePlaylist.coverage.length})
+              </summary>
+              <ul aria-label="Course playlist topic map" className="mt-1.5 space-y-1">
+                {coursePlaylist.coverage.map((entry) => {
+                  const topic = topicById.get(entry.topicId);
+                  return (
+                    <li
+                      key={entry.topicId}
+                      className="flex flex-wrap items-baseline gap-1.5 text-[0.7rem] leading-snug text-[var(--muted)]"
+                    >
+                      <span className="font-bold text-[var(--text)]">
+                        {topic?.title ?? entry.topicId}
+                      </span>
+                      <span>→</span>
+                      <a
+                        href={`https://www.youtube.com/watch?v=${entry.videoId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="max-w-[24rem] truncate hover:underline"
+                        style={{ color: "var(--brand)" }}
+                        title={entry.videoTitle}
+                      >
+                        {entry.videoTitle}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
       {/* -------------------------------- filters -------------------------------- */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         <select
@@ -559,14 +757,17 @@ export function PlaylistBoard({
                         Asli YouTube results (top {videos.length}) — title/channel/views sach;
                         ranking humari analysis se.{" "}
                         <b style={{ color: "var(--warn)" }}>% syllabus</b> ek estimate hai (title +
-                        description matching) — video dekh ke khud confirm karo. Aur results ke
-                        liye search link neeche.
+                        description matching) — video dekh ke khud confirm karo. Thumbnail par
+                        click karke yahin preview bhi kar sakte ho. Aur results ke liye search link
+                        neeche.
                       </p>
                     ) : (
                       <p className="mt-1 text-[0.68rem] leading-relaxed text-[var(--muted)]">
                         {videoStatus === "loading"
                           ? "YouTube se real videos load ho rahe hain…"
-                          : `YouTube API abhi available nahi (${apiReasonLabel(liveVideos?.reason)}) — ye YouTube search suggestion hai, results me se khud suitable lecture chuno.`}
+                          : liveVideos?.reason
+                            ? `YouTube API abhi available nahi (${apiReasonLabel(liveVideos.reason)}) — ye YouTube search suggestion hai, results me se khud suitable lecture chuno.`
+                            : "YouTube par is card ke liye lecture nahi mile — search link se results dekho."}
                       </p>
                     )}
 
@@ -583,16 +784,24 @@ export function PlaylistBoard({
                                 96×54 lazy thumb and tests verify the real
                                 i.ytimg.com URL — an optimizer proxy hop would
                                 add cost/indirection for zero gain here. */}
-                            {/* eslint-disable-next-line @next/next/no-img-element -- see above */}
-                            <img
-                              src={v.thumb}
-                              alt=""
-                              width={96}
-                              height={54}
-                              loading="lazy"
-                              className="h-[54px] w-24 shrink-0 rounded-md object-cover"
-                              style={{ background: "var(--surface-2)" }}
-                            />
+                            <button
+                              type="button"
+                              onClick={() => openPreview(v)}
+                              aria-label={`Preview: ${v.title}`}
+                              title="Yahin par play karo — ExamSmasher me hi wapas aao"
+                              className="shrink-0 rounded-md transition-opacity hover:opacity-85 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element -- see above */}
+                              <img
+                                src={v.thumb}
+                                alt=""
+                                width={96}
+                                height={54}
+                                loading="lazy"
+                                className="h-[54px] w-24 rounded-md object-cover"
+                                style={{ background: "var(--surface-2)" }}
+                              />
+                            </button>
                             <div className="min-w-0 flex-1">
                               <a
                                 href={v.url}
@@ -620,6 +829,14 @@ export function PlaylistBoard({
                                 <span className="chip" title={v.matchedTopics.join(" · ")}>
                                   {v.matchedTopics.length}/{topics.length} topics
                                 </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openPreview(v)}
+                                  aria-label={`Play here: ${v.title}`}
+                                  className="btn-ghost px-2 py-1 text-[0.66rem]"
+                                >
+                                  ▶ Preview
+                                </button>
                               </div>
                               {v.matchedTopics.length > 0 && (
                                 <p
@@ -644,6 +861,9 @@ export function PlaylistBoard({
                         const subs = subtopicsByTopicId[topic.id];
                         const covered = isCovered(topic.title);
                         const row = smart ? priorityById.get(topic.id) : undefined;
+                        // Did any of THIS card's real videos actually mention the
+                        // topic? Honest either way — it is a title+description read.
+                        const inVideos = videos.some((v) => v.matchedTopics.includes(topic.title));
                         return (
                           <li
                             key={topic.id}
@@ -672,6 +892,22 @@ export function PlaylistBoard({
                                 title={subs.join(" · ")}
                               >
                                 +{subs.length} sub
+                              </span>
+                            )}
+                            {videos.length > 0 && (
+                              <span
+                                className="chip shrink-0 font-bold"
+                                style={{
+                                  color: inVideos ? "var(--brand)" : "var(--warn)",
+                                  borderColor: `color-mix(in srgb, ${inVideos ? "var(--brand)" : "var(--warn)"} 45%, var(--line))`,
+                                }}
+                                title={
+                                  inVideos
+                                    ? "Kisi video ke title/description me ye topic mila — estimate hai, dekh ke confirm karo"
+                                    : "In top videos ke title/description me ye topic nahi mila — search link se aur dhundo"
+                                }
+                              >
+                                {inVideos ? "✓ video me mila" : "⚠️ video me nahi mila"}
                               </span>
                             )}
                             <button
@@ -817,6 +1053,9 @@ export function PlaylistBoard({
           ))}
         </ul>
       </div>
+
+      {/* Watch inside ExamSmasher, close, and continue right where they left off. */}
+      <VideoPlayerModal video={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }

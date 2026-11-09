@@ -20,6 +20,8 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 interface Entry {
   at: number;
   results: Record<string, VideoMatch[]>;
+  /** Why some cards came back empty (partial batch failure) — for honest labels. */
+  reason?: string;
 }
 type Store = Record<string, Entry>;
 
@@ -70,17 +72,28 @@ function trim(store: Store): Store {
   return store;
 }
 
+/** What a plan signature cached: the results, plus (if some batch failed)
+ *  why other cards came back empty — so the honest label survives reloads. */
+export interface CachedVideos {
+  results: Record<string, VideoMatch[]>;
+  reason?: string;
+}
+
 /** The cached results for a plan signature, or null on a miss/stale entry. */
-export function readVideoCache(sig: string): Record<string, VideoMatch[]> | null {
+export function readVideoCache(sig: string): CachedVideos | null {
   const entry = loadStore()[sig];
   if (!entry || Date.now() - entry.at > TTL_MS) return null;
-  return entry.results;
+  return { results: entry.results, reason: entry.reason };
 }
 
 /** Store a successful /api/videos response under its plan signature. */
-export function writeVideoCache(sig: string, results: Record<string, VideoMatch[]>): void {
+export function writeVideoCache(
+  sig: string,
+  results: Record<string, VideoMatch[]>,
+  reason?: string,
+): void {
   if (!results || Object.keys(results).length === 0) return;
   const store = loadStore();
-  store[sig] = { at: Date.now(), results };
+  store[sig] = reason ? { at: Date.now(), results, reason } : { at: Date.now(), results };
   persist(trim(store));
 }

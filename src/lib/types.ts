@@ -503,7 +503,7 @@ export interface VideoSuggestionsRequest {
   /** One entry per recommendation card: card id → the search query. */
   queries: { key: string; query: string }[];
   /** The student's FULL syllabus — coverage % is measured against these. */
-  topics: { title: string; keywords: string[] }[];
+  topics: { title: string; keywords: string[]; subtopics?: string[] }[];
 }
 
 /** POST /api/videos response. */
@@ -511,6 +511,57 @@ export interface VideoSuggestionsResponse {
   ok: boolean;
   /** key (card id) → ranked top videos. */
   results?: Record<string, VideoMatch[]>;
+  /** Set when ok=false: "no-key" | "quota" | "upstream" | "bad-request" | "throttled". */
+  reason?: string;
+}
+
+/* ------------------------ full-course playlist (server) ------------------------ */
+
+/** One video INSIDE a discovered course playlist, in YouTube's own order. */
+export interface CoursePlaylistVideo {
+  videoId: string;
+  title: string;
+  position: number;
+}
+
+/** One syllabus topic mapped onto the playlist video that teaches it. */
+export interface CoursePlaylistTopicMap {
+  topicId: string;
+  videoId: string;
+  videoTitle: string;
+}
+
+/**
+ * An EXISTING YouTube course playlist that genuinely covers the syllabus.
+ * Every field is what the YouTube Data API returned — a playlist is only
+ * ever described by its real metadata, and `coverage` only maps topics onto
+ * playlist videos that really exist in it.
+ */
+export interface CoursePlaylist {
+  id: string;
+  title: string;
+  channelTitle: string;
+  thumbnail: string;
+  videoCount: number;
+  /** https://www.youtube.com/playlist?list=… */
+  url: string;
+  videos: CoursePlaylistVideo[];
+  coverage: CoursePlaylistTopicMap[];
+  /** ESTIMATE: % of the student's topics found in the playlist's video titles. */
+  coveragePercent: number;
+}
+
+/** POST /api/playlists request body. */
+export interface CoursePlaylistRequest {
+  subject: string;
+  topics: { id: string; title: string; keywords: string[] }[];
+  syllabus?: string;
+}
+
+/** POST /api/playlists response. `playlist: null` = nothing credible found. */
+export interface CoursePlaylistResponse {
+  ok: boolean;
+  playlist?: CoursePlaylist | null;
   /** Set when ok=false: "no-key" | "quota" | "upstream" | "bad-request" | "throttled". */
   reason?: string;
 }

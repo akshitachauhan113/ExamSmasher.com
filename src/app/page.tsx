@@ -469,10 +469,20 @@ export default function Home() {
     await runMatching(topics, subjectName, controller.signal, language, perTopic, true);
   }, [topics, subjectName, language, perTopic, runMatching]);
 
-  /** Step 2 skipped — go straight to links, importance taken from syllabus. */
+  /**
+   * Step 2 skipped — go straight to links, importance taken from syllabus.
+   *
+   * The skip ALSO opens the next step by itself (Complete Syllabus Analysis):
+   * the student used to get stuck on the PYQ tab with no idea the links were
+   * already building, and had to hunt for a tab. Exception: when the skip
+   * happened ON the Video Playlists tab (its "links banao" hint), stay put —
+   * the board appears in place there, so moving them would be the opposite
+   * of helpful. Links still build exactly once either way.
+   */
   const skipPapers = useCallback(() => {
     setPyqSkipped(true);
     notify("Theek hai — syllabus importance se search links bana raha hoon.");
+    setAnalysisTab((tab) => (tab === "playlists" ? tab : "complete"));
     void beginVideoSearch();
   }, [beginVideoSearch, notify]);
 
@@ -801,6 +811,13 @@ export default function Home() {
     scrollToEl("analysis", 90);
   }, [scrollToEl]);
 
+  /** Opens the Video Playlists tab — the third step's actual results. */
+  const goPlaylists = useCallback(() => {
+    setView("home");
+    setAnalysisTab("playlists");
+    scrollToEl("analysis", 90);
+  }, [scrollToEl]);
+
   /** Opens My Study Space, optionally jumping to one of its four panels. */
   const openSpace = useCallback(
     (anchor?: SpaceAnchor) => {
@@ -1092,6 +1109,7 @@ export default function Home() {
 
   const playlistBoard = (
     <PlaylistBoard
+      subject={subjectName}
       topics={topics}
       subtopicsByTopicId={subtopicsByTopicId}
       bandFor={(topic) => bandByTopic.get(topic.id) ?? "should"}
@@ -1312,6 +1330,8 @@ export default function Home() {
                         onPlanBuilt={handlePlanBuilt}
                         onJumpToTopic={jumpTo}
                         onOpenSpace={() => changeView("space")}
+                        videosReady={phase === "done"}
+                        onGoPlaylists={goPlaylists}
                       />
 
                       {phase === "papers" && !exam.plan && (

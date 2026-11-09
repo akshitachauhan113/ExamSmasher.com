@@ -208,7 +208,9 @@ function searchVideos(query: string, key: string): Promise<RawVideo[]> {
   return task;
 }
 
-/** Rank one query's candidates and estimate syllabus coverage for each. */
+/** Rank one query's candidates and estimate syllabus coverage for each.
+ *  The FULL sorted list comes back — de-duplication across cards happens
+ *  once every query has landed, in the plan's own order. */
 function rank(
   raw: RawVideo[],
   query: string,
@@ -241,8 +243,7 @@ function rank(
         matchedTopics: coverage.matched,
       } satisfies VideoMatch;
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, TOP_N);
+    .sort((a, b) => b.score - a.score);
 }
 
 function parsePayload(body: unknown): VideoSuggestionsRequest | { error: true } {
@@ -271,6 +272,12 @@ function parsePayload(body: unknown): VideoSuggestionsRequest | { error: true } 
       title: topic.title.slice(0, 200),
       keywords: Array.isArray(topic.keywords)
         ? topic.keywords.filter((k): k is string => typeof k === "string").slice(0, 30).map((k) => k.slice(0, 80))
+        : [],
+      subtopics: Array.isArray(topic.subtopics)
+        ? topic.subtopics
+            .filter((s): s is string => typeof s === "string")
+            .slice(0, 40)
+            .map((s) => s.slice(0, 100))
         : [],
     });
   }
@@ -319,6 +326,20 @@ export async function POST(request: Request): Promise<Response> {
     }
   });
   await Promise.all(workers);
+
+  // Never recommend the SAME video on two cards: walk the cards in PLAN
+  // order (syllabus order, or priority order in the smart playlist) and drop
+  // a video an earlier card already kept. A later card backfills from its own
+  // runner-ups, so it can silently shrink to zero only when everything it
+  // found was genuinely already shown above.
+  const used = new Set<string>();
+  for (const { key } of queries) {
+    const list = results[key];
+    if (!list) continue;
+    const unique = list.filter((video) => !used.has(video.id));
+    unique.forEach((video) => used.add(video.id));
+    results[key] = unique.slice(0, TOP_N);
+  }
 
   if (quotaReason === "no-key") return json({ ok: false, reason: "no-key" }, 503);
   if (quotaReason === "quota") return json({ ok: false, reason: "quota" }, 429);

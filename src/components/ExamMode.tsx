@@ -49,6 +49,10 @@ interface ExamModeProps {
   onJumpToTopic: (topicId: string) => void;
   /** Opens My Study Space, where the solved paper / mock / quiz now live. */
   onOpenSpace?: () => void;
+  /** True once the video suggestions for this plan finished building. */
+  videosReady?: boolean;
+  /** Opens the Video Playlists tab — the step right after this plan. */
+  onGoPlaylists?: () => void;
 }
 
 /** Exam state (papers / questions / parsed papers / plan) lives in @/lib/examState —
@@ -89,6 +93,8 @@ export function ExamMode({
   onPlanBuilt,
   onJumpToTopic,
   onOpenSpace,
+  videosReady,
+  onGoPlaylists,
 }: ExamModeProps) {
   // Page-owned state: survives a re-analysis of the syllabus, so the student
   // never has to re-OCR their papers just because they edited the syllabus.
@@ -596,6 +602,28 @@ export function ExamMode({
                 </li>
               ))}
             </ul>
+          )}
+
+          {/* Step 3 announces itself: the suggestions finished building while
+              the student read the plan — one click and they are there. */}
+          {videosReady && onGoPlaylists && (
+            <div
+              className="mt-5 rounded-xl border px-4 py-3 text-xs leading-relaxed"
+              style={{
+                borderColor: "color-mix(in srgb, var(--brand) 40%, var(--line))",
+                background: "color-mix(in srgb, var(--brand) 6%, var(--surface-2))",
+              }}
+            >
+              🎬 Video suggestions ready — har card me asli YouTube lectures, % syllabus coverage
+              aur yahin preview.
+              <button
+                type="button"
+                onClick={onGoPlaylists}
+                className="btn-primary ml-2 inline-flex shrink-0 px-3 py-1.5 text-xs"
+              >
+                Video Playlists kholo →
+              </button>
+            </div>
           )}
 
           {/* Solved paper, mock test and quiz moved to My Study Space —
