@@ -470,6 +470,51 @@ export interface RecommendationPlan {
   signature: string;
 }
 
+/**
+ * One REAL YouTube video matched to a syllabus search (server-fetched).
+ *
+ * Every field comes from the YouTube Data API — nothing is invented. The
+ * coverage numbers are an ESTIMATE from the video's title + description
+ * (it reads text, it does not watch the video) and the UI labels them so.
+ */
+export interface VideoMatch {
+  /** The real 11-character YouTube video id. */
+  id: string;
+  title: string;
+  channel: string;
+  durationSec: number;
+  views: number;
+  /** Real thumbnail from YouTube's CDN (i.ytimg.com). */
+  thumb: string;
+  /** https://www.youtube.com/watch?v=… — the real video URL. */
+  url: string;
+  /** Publish date, "YYYY-MM-DD" ("" when unknown). */
+  published: string;
+  /** Combined quality score, 0–100 (rank, views, duration, title, coverage). */
+  score: number;
+  /** ESTIMATE: % of the student's syllabus topics mentioned in title+description. */
+  coveragePct: number;
+  /** Syllabus topics the video's title+description mentioned. */
+  matchedTopics: string[];
+}
+
+/** POST /api/videos request body. */
+export interface VideoSuggestionsRequest {
+  /** One entry per recommendation card: card id → the search query. */
+  queries: { key: string; query: string }[];
+  /** The student's FULL syllabus — coverage % is measured against these. */
+  topics: { title: string; keywords: string[] }[];
+}
+
+/** POST /api/videos response. */
+export interface VideoSuggestionsResponse {
+  ok: boolean;
+  /** key (card id) → ranked top videos. */
+  results?: Record<string, VideoMatch[]>;
+  /** Set when ok=false: "no-key" | "quota" | "upstream" | "bad-request" | "throttled". */
+  reason?: string;
+}
+
 /** One MCQ in a generated quiz. */
 export interface QuizQuestion {
   id: string;

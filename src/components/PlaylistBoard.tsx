@@ -1,15 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalIcon } from "@/components/Icons";
 import { TabBar } from "./TabBar";
 import { BAND_LABEL } from "@/lib/exam";
+import { formatDuration, formatViews } from "@/lib/format";
+import { readVideoCache, writeVideoCache } from "@/lib/videoCache";
 import type {
   ExamTopic,
   RecommendationPlan,
   SmartPriority,
   SmartPriorityResult,
   Topic,
+  VideoMatch,
+  VideoSuggestionsResponse,
 } from "@/lib/types";
 
 export type PlaylistTab = "complete" | "smart";
@@ -55,13 +59,34 @@ const PRIORITY_META: Record<SmartPriority, { label: string; color: string }> = {
 type CoverageFilter = "all" | "pending" | "covered";
 type WatchedFilter = "all" | "pending" | "watched";
 
+/** Human (Hinglish) label for why the YouTube API could not answer. */
+function apiReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "no-key":
+      return "key set nahi";
+    case "quota":
+      return "quota khatam";
+    case "bad-request":
+      return "request galat";
+    case "throttled":
+      return "bahut zyada requests";
+    case "network":
+      return "network issue";
+    default:
+      return "result nahi mila";
+  }
+}
+
 /**
- * The two playlists as a compact two-tab board of GROUPED search suggestions.
+ * The two playlists as a compact two-tab board of GROUPED suggestions.
  *
  * Each card is ONE YouTube search covering several syllabus topics (minimum
- * lectures, maximum coverage) — never a fabricated video. Whether a result
- * actually covers those topics is for the student to judge after opening it,
- * and the UI says exactly that. Coverage only grows from the student's own
+ * lectures, maximum coverage). The server resolves that search into REAL
+ * YouTube videos (title/channel/duration/views/thumbnail, never fabricated)
+ * and estimates how much of the student's syllabus each one mentions from
+ * its title + description — an ESTIMATE the UI labels as one. When the API
+ * cannot answer (key, quota, network), the card falls back to the honest
+ * search link and says so. Coverage only grows from the student's own
  * ticks: a generated link never counts as "covered".
  */
 export function PlaylistBoard({
@@ -89,6 +114,93 @@ export function PlaylistBoard({
     () => new Map(priority.topics.map((row) => [row.topicId, row])),
     [priority],
   );
+
+  /* --------------------- real video suggestions (YouTube API) --------------------- */
+
+  /** Signature of the exact query set + syllabus currently on screen. */
+  const videoSig = `${active}::${plan.signature}`;
+  const videoQueries = useMemo(
+    () => plan.recommendations.map((rec) => ({ key: rec.id, query: rec.query })),
+    [plan],
+  );
+  const videoTopics = useMemo(
+    () => topics.map((topic) => ({ title: topic.title, keywords: topic.keywords })),
+    [topics],
+  );
+
+  const [videoState, setVideoState] = useState<{
+    sig: string;
+    status: "loading" | "ready" | "fallback";
+    reason?: string;
+    byKey: Record<string, VideoMatch[]>;
+  } | null>(null);
+
+  useEffect(() => {
+    // No recommendations → nothing to fetch; `liveVideos` below already
+    // hides any stale entry whose signature does not match the screen.
+    if (videoQueries.length === 0) return;
+    const controller = new AbortController();
+
+    // All setState lives inside this async fn (never directly in the effect
+    // body) so the render stays a single, predictable pass.
+    const run = async () => {
+      const cached = readVideoCache(videoSig);
+      if (cached) {
+        setVideoState({ sig: videoSig, status: "ready", byKey: cached });
+        return;
+      }
+
+      setVideoState({ sig: videoSig, status: "loading", byKey: {} });
+      // The route accepts MAX_QUERIES (10) queries per call — chunk bigger
+      // plans so every card still gets its videos. Partial success still
+      // shows the real videos that did land; a card with none falls back
+      // to its honest search link and says why.
+      const BATCH = 10;
+      const byKey: Record<string, VideoMatch[]> = {};
+      let firstReason: string | undefined;
+      let anyOk = false;
+      const finishOk = () => {
+        writeVideoCache(videoSig, byKey);
+        setVideoState({ sig: videoSig, status: "ready", byKey });
+      };
+      try {
+        for (let i = 0; i < videoQueries.length; i += BATCH) {
+          if (controller.signal.aborted) return;
+          const res = await fetch("/api/videos", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              queries: videoQueries.slice(i, i + BATCH),
+              topics: videoTopics,
+            }),
+            signal: controller.signal,
+          });
+          const data = (await res.json()) as VideoSuggestionsResponse;
+          if (controller.signal.aborted) return;
+          if (data.ok && data.results) {
+            anyOk = true;
+            Object.assign(byKey, data.results);
+          } else if (!firstReason) {
+            firstReason = data.reason;
+          }
+        }
+        if (controller.signal.aborted) return;
+        if (anyOk) finishOk();
+        else setVideoState({ sig: videoSig, status: "fallback", reason: firstReason, byKey: {} });
+      } catch {
+        if (controller.signal.aborted) return;
+        // Network died mid-way — keep whatever real videos already landed.
+        if (anyOk) finishOk();
+        else setVideoState({ sig: videoSig, status: "fallback", reason: "network", byKey: {} });
+      }
+    };
+    void run();
+
+    return () => controller.abort();
+  }, [videoSig, videoQueries, videoTopics]);
+
+  /** Current state only if it belongs to the signature on screen. */
+  const liveVideos = videoState && videoState.sig === videoSig ? videoState : null;
 
   /* ------------------------------ coverage ------------------------------ */
   const coveredCount = useMemo(
@@ -179,8 +291,8 @@ export function PlaylistBoard({
         <div>
           <h2 className="text-[1.05rem] font-extrabold">🎬 Video playlists</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-            Kam searches, zyada topic coverage — har card ek comprehensive lecture search hai jo
-            multiple topics cover kare.
+            Har card ke andar YouTube ke asli best lectures — ranking analysis se aur % syllabus
+            coverage ke saath. Search link se aur bhi results kholein.
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
@@ -214,11 +326,13 @@ export function PlaylistBoard({
         />
       </div>
 
-      {/* honest disclaimer — the exact phrase older tests (and students) rely on */}
+      {/* honest disclaimer — real API results, honestly labelled estimate */}
       <p className="mt-1.5 text-[0.68rem] leading-relaxed text-[var(--muted)]">
-        ⚠️ Koi video verify ya rank nahi kiya gaya (koi YouTube API nahi hai) — har card ek YouTube
-        search suggestion hai, uska link YouTube ke apne results page kholta hai. Wahan se apne
-        liye suitable lecture chuno, jo wahan dikhe wahi dekhna.
+        ⚠️ Videos YouTube Data API se live aate hain — title, channel, duration, views sach hote
+        hain. Ranking relevance + views + duration + syllabus match se hoti hai; “X% syllabus” ek
+        ESTIMATE hai (video ke title + description ko aapke topics se match karke) — dekh ke khud
+        confirm karo. Agar API available nahi (jaise quota khatam), toh har card sirf search
+        suggestion rahega.
       </p>
 
       {/* --------------------------- coverage tracker --------------------------- */}
@@ -378,6 +492,8 @@ export function PlaylistBoard({
             const { rec, recTopics, coveredIn, fullyCovered, watched } = info;
             const smart = active === "smart" && rec.priority;
             const meta = rec.priority ? PRIORITY_META[rec.priority] : null;
+            const videos = liveVideos?.byKey[rec.id] ?? [];
+            const videoStatus = liveVideos?.status ?? "loading";
             return (
               <li
                 key={rec.id}
@@ -438,10 +554,89 @@ export function PlaylistBoard({
                     >
                       🔍 {rec.query}
                     </p>
-                    <p className="mt-1 text-[0.68rem] leading-relaxed text-[var(--muted)]">
-                      YouTube search suggestion — results me se khud suitable lecture chuno (koi
-                      video title/channel/verify nahi kiya gaya).
-                    </p>
+                    {videos.length > 0 ? (
+                      <p className="mt-1 text-[0.68rem] leading-relaxed text-[var(--muted)]">
+                        Asli YouTube results (top {videos.length}) — title/channel/views sach;
+                        ranking humari analysis se.{" "}
+                        <b style={{ color: "var(--warn)" }}>% syllabus</b> ek estimate hai (title +
+                        description matching) — video dekh ke khud confirm karo. Aur results ke
+                        liye search link neeche.
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[0.68rem] leading-relaxed text-[var(--muted)]">
+                        {videoStatus === "loading"
+                          ? "YouTube se real videos load ho rahe hain…"
+                          : `YouTube API abhi available nahi (${apiReasonLabel(liveVideos?.reason)}) — ye YouTube search suggestion hai, results me se khud suitable lecture chuno.`}
+                      </p>
+                    )}
+
+                    {videos.length > 0 && (
+                      <ul aria-label="Video suggestions" className="mt-2 space-y-1.5">
+                        {videos.map((v) => (
+                          <li
+                            key={v.id}
+                            data-video-id={v.id}
+                            className="flex gap-2.5 rounded-lg border px-2.5 py-2"
+                            style={{ borderColor: "var(--line)", background: "var(--surface)" }}
+                          >
+                            {/* Raw CDN src kept (not next/image): the card shows a
+                                96×54 lazy thumb and tests verify the real
+                                i.ytimg.com URL — an optimizer proxy hop would
+                                add cost/indirection for zero gain here. */}
+                            {/* eslint-disable-next-line @next/next/no-img-element -- see above */}
+                            <img
+                              src={v.thumb}
+                              alt=""
+                              width={96}
+                              height={54}
+                              loading="lazy"
+                              className="h-[54px] w-24 shrink-0 rounded-md object-cover"
+                              style={{ background: "var(--surface-2)" }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <a
+                                href={v.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block truncate text-xs font-extrabold hover:underline"
+                                aria-label={`Watch: ${v.title}`}
+                                title={v.title}
+                              >
+                                {v.title}
+                              </a>
+                              <p className="mt-0.5 truncate text-[0.66rem] text-[var(--muted)]">
+                                {v.channel} · {formatDuration(v.durationSec)} ·{" "}
+                                {formatViews(v.views)} views
+                                {v.published ? ` · ${v.published.slice(0, 4)}` : ""}
+                              </p>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                <span
+                                  className="chip font-bold"
+                                  style={{ color: "var(--brand)" }}
+                                  title="Title + description matching se estimate — video dekh ke confirm karo"
+                                >
+                                  ≈{v.coveragePct}% syllabus
+                                </span>
+                                <span className="chip" title={v.matchedTopics.join(" · ")}>
+                                  {v.matchedTopics.length}/{topics.length} topics
+                                </span>
+                              </div>
+                              {v.matchedTopics.length > 0 && (
+                                <p
+                                  className="mt-1 truncate text-[0.66rem] leading-snug text-[var(--muted)]"
+                                  title={v.matchedTopics.join(" · ")}
+                                >
+                                  ✓ Covers: {v.matchedTopics.slice(0, 3).join(", ")}
+                                  {v.matchedTopics.length > 3
+                                    ? ` +${v.matchedTopics.length - 3} more`
+                                    : ""}
+                                </p>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
 
                     <ul className="mt-2 space-y-1.5">
                       {recTopics.map((topic) => {

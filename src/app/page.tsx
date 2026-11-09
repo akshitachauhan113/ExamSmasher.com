@@ -1386,7 +1386,8 @@ export default function Home() {
             <div>
               <h1 className="text-xl font-extrabold">My Playlists</h1>
               <p className="mt-0.5 text-sm text-[var(--muted)]">
-                Do playlist — poore syllabus ke search links, ya exam priority ke hisaab se.
+                Do playlist — poore syllabus ke asli video suggestions + coverage %, ya exam
+                priority ke hisaab se.
               </p>
             </div>
             {linksReady ? (
@@ -1420,7 +1421,7 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-[var(--line)] py-6 text-center text-xs text-[var(--muted)]">
-        ExamSmasher · trends from YOUR real papers · runs in your browser with no API keys ·
+        ExamSmasher · trends from YOUR real papers · no sign-in, no API key needed from you ·
         priority is computed from actual questions, not guessed.
       </footer>
 

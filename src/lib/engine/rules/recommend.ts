@@ -10,14 +10,17 @@ import type {
 } from "@/lib/types";
 
 /**
- * Video recommendations = HONEST YOUTUBE SEARCH SUGGESTIONS, optimised for
- * minimum lectures covering maximum syllabus.
+ * Video recommendations = the QUERIES behind each playlist card, optimised
+ * for minimum lectures covering maximum syllabus.
  *
- * What this module does NOT do: call YouTube, rank videos, or invent a
- * title/channel/thumbnail/duration/views/URL of any real video. It builds a
- * search URL from the student's own syllabus wording and states which topics
- * that search is intended to cover. Whether a result actually covers them is
- * for the student to judge after opening it — the UI says exactly that.
+ * What this module does NOT do: call YouTube, fetch video metadata, or
+ * invent a title/channel/thumbnail/duration/views/URL of any real video.
+ * It builds a search query from the student's own syllabus wording and
+ * states which topics that search is intended to cover. The server route
+ * (/api/videos) resolves that query into REAL YouTube videos and estimates
+ * syllabus coverage from their title + description — an estimate the UI
+ * labels as one. When the API cannot answer, the card falls back to this
+ * module's honest search link.
  *
  * The optimisation is deterministic and greedy:
  *   - topics inside ONE unit are grouped so a single comprehensive lecture
@@ -179,7 +182,7 @@ export function buildRecommendations(input: BuildRecommendationsInput): Recommen
   const hint = languageHint(language);
 
   const notes: string[] = [
-    "Har card ek YouTube search suggestion hai — koi video verify ya rank nahi kiya gaya. Link kholein aur khud se suitable lecture chunein.",
+    "Har card ki search se YouTube API ke asli results aate hain — ranking relevance + views + duration + syllabus match se banti hai, aur coverage % title + description matching ka estimate hai. API available na ho toh wahi search suggestion fallback.",
   ];
 
   /* ---- bucket every topic honestly: studied / unsearchable / recommendable ---- */
