@@ -1103,6 +1103,9 @@ export default function Home() {
       examEntry={examByTopic.get(topic.id)}
       band={bandByTopic.get(topic.id) ?? "should"}
       pyqQuestions={pyqByTopic.get(topic.id)}
+      language={language}
+      allTopics={topics}
+      subtopicsByTopicId={subtopicsByTopicId}
       onToggleStudied={() => handleToggleStudied(topic.title)}
     />
   );

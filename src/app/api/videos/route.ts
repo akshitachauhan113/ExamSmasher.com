@@ -150,10 +150,13 @@ function searchVideos(query: string, key: string): Promise<RawVideo[]> {
   if (pending) return pending;
 
   const task = (async (): Promise<RawVideo[]> => {
+    // 12 candidates (was 6): search.list costs the same 100 quota units
+    // whatever maxResults is (≤50), so a wider pool gives the ranker more to
+    // choose from and gives cross-card de-duplication room to backfill.
     const search = await yt("search", {
       part: "snippet",
       type: "video",
-      maxResults: "6",
+      maxResults: "12",
       q: query,
       safeSearch: "moderate",
       videoEmbeddable: "true",
@@ -248,7 +251,7 @@ function rank(
 
 function parsePayload(body: unknown): VideoSuggestionsRequest | { error: true } {
   if (!body || typeof body !== "object") return { error: true };
-  const { queries, topics } = body as Partial<VideoSuggestionsRequest>;
+  const { queries, topics, limit, exclude } = body as Partial<VideoSuggestionsRequest>;
   if (!Array.isArray(queries) || queries.length === 0 || queries.length > MAX_QUERIES) {
     return { error: true };
   }
@@ -281,7 +284,24 @@ function parsePayload(body: unknown): VideoSuggestionsRequest | { error: true } 
         : [],
     });
   }
-  return { queries: cleanQueries, topics: cleanTopics };
+
+  // Optional per-request cap: how many videos each key returns (1-6). The
+  // default keeps the playlist cards exactly as they were; per-topic cards
+  // ask for a couple more so there is a recommendation AND alternatives.
+  const cleanLimit =
+    typeof limit === "number" && Number.isFinite(limit)
+      ? Math.max(1, Math.min(6, Math.round(limit)))
+      : undefined;
+
+  // Optional client-known video ids to keep off this card (already shown on
+  // another topic). Capped so the body can never grow unbounded.
+  const cleanExclude = Array.isArray(exclude)
+    ? exclude
+        .filter((id): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{6,20}$/.test(id))
+        .slice(0, 400)
+    : [];
+
+  return { queries: cleanQueries, topics: cleanTopics, limit: cleanLimit, exclude: cleanExclude };
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -303,7 +323,8 @@ export async function POST(request: Request): Promise<Response> {
   const payload = parsePayload(rawBody);
   if ("error" in payload) return json({ ok: false, reason: "bad-request" }, 400);
 
-  const { queries, topics } = payload;
+  const { queries, topics, limit, exclude } = payload;
+  const perKey = limit ?? TOP_N;
   const results: Record<string, VideoMatch[]> = {};
   let quotaReason: "quota" | "no-key" | null = null;
 
@@ -331,14 +352,15 @@ export async function POST(request: Request): Promise<Response> {
   // order (syllabus order, or priority order in the smart playlist) and drop
   // a video an earlier card already kept. A later card backfills from its own
   // runner-ups, so it can silently shrink to zero only when everything it
-  // found was genuinely already shown above.
-  const used = new Set<string>();
+  // found was genuinely already shown above. `exclude` seeds the same set
+  // with ids another REQUEST already showed (the server cannot see those).
+  const used = new Set<string>(exclude ?? []);
   for (const { key } of queries) {
     const list = results[key];
     if (!list) continue;
     const unique = list.filter((video) => !used.has(video.id));
     unique.forEach((video) => used.add(video.id));
-    results[key] = unique.slice(0, TOP_N);
+    results[key] = unique.slice(0, perKey);
   }
 
   if (quotaReason === "no-key") return json({ ok: false, reason: "no-key" }, 503);

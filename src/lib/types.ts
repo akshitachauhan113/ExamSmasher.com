@@ -94,11 +94,54 @@ export interface NotesResponse {
   notes?: NotesSection[];
   cards?: Flashcard[];
   source?: EngineSource;
+  /**
+   * Which engine actually wrote this copy — "server" = the site's own
+   * server-side model (key stays server-side), "browser" = the on-device
+   * model. Never claimed unless that engine really produced the text.
+   */
+  via?: "server" | "browser";
   error?: string;
 }
 
 /** Which language study material is written in — the student picks one. */
 export type NotesLang = "english" | "hinglish";
+
+/* --------------------------- server notes route ----------------------------- */
+
+/** One syllabus topic as the server route sees it (topic-scoped notes). */
+export interface NotesTopicInput {
+  title: string;
+  description: string;
+  keywords: string[];
+  chapter?: string;
+  importance?: string;
+  difficulty?: string;
+}
+
+/** POST /api/notes request body — structured notes written server-side. */
+export interface NotesGenerationRequest {
+  /** "topic" → the 12-element structured notes; "document" → markdown. */
+  scope: "topic" | "document";
+  subject: string;
+  syllabus: string;
+  language: NotesLang;
+  /** Required for scope="topic". */
+  topic?: NotesTopicInput;
+  /** Real past questions to weave in — the notes must prepare for THESE. */
+  examQuestions?: string[];
+  /** scope="document": restrict to one unit; omit for the whole syllabus. */
+  unit?: string;
+  /** scope="document": the extracted topic titles, in syllabus order. */
+  topicTitles?: { title: string; chapter?: string }[];
+}
+
+/** POST /api/notes response — real generated content or an honest reason. */
+export interface NotesGenerationResponse extends NotesResponse {
+  /** scope="document": the markdown document. */
+  markdown?: string;
+  /** "no-key" | "bad-request" | "upstream" | "throttled" | "timeout". */
+  reason?: string;
+}
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -233,6 +276,8 @@ export interface FullNotesResponse {
   markdown?: string;
   sections?: number;
   source?: EngineSource;
+  /** "server" = the site's server-side model, "browser" = the on-device one. */
+  via?: "server" | "browser";
   error?: string;
 }
 
@@ -504,6 +549,18 @@ export interface VideoSuggestionsRequest {
   queries: { key: string; query: string }[];
   /** The student's FULL syllabus — coverage % is measured against these. */
   topics: { title: string; keywords: string[]; subtopics?: string[] }[];
+  /**
+   * Optional: how many videos to return per query (1-6). Defaults to the
+   * route's own cap (3) so playlist cards keep their current shape; per-topic
+   * cards ask for a few more so there is one recommendation plus alternatives.
+   */
+  limit?: number;
+  /**
+   * Optional: video ids already shown on another card — the route drops these
+   * before ranking so the same lecture never lands on two different topics
+   * (across separate requests, which the server cannot see on its own).
+   */
+  exclude?: string[];
 }
 
 /** POST /api/videos response. */

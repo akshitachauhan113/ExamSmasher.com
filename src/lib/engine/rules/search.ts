@@ -36,6 +36,31 @@ export interface SearchLinksInput {
   skipped?: boolean;
 }
 
+/**
+ * The YouTube Data API query used to discover REAL videos for ONE topic
+ * (posted to /api/videos, which returns actual metadata — this is a query
+ * string, never a link).
+ *
+ * Built from the topic's own syllabus wording — title, its strongest
+ * keywords, the course and a language hint — so the search matches the
+ * SYLLABUS TOPIC rather than a broad subject term. "full lecture" prefers
+ * the detailed, single-sitting videos the brief asks for.
+ */
+export function topicVideoQuery(
+  topic: Topic,
+  subject: string,
+  language: string,
+): string {
+  const hint = languageHint(language);
+  const keywords = topic.keywords.slice(0, 2).join(" ");
+  const join = (...parts: Array<string | undefined>) =>
+    parts.filter((p) => p && p.trim()).map((p) => p!.trim()).join(" ");
+  return join(topic.title, keywords, subject, hint, "full lecture")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
 /** Builds the honest per-topic YouTube search suggestions. */
 export function buildSearchLinks(input: SearchLinksInput): TopicResult {
   const { topic, subject, language, limit } = input;

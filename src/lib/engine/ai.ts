@@ -1,19 +1,17 @@
 import { generateJson, generateText } from "@/lib/ai/generate";
+import { normalizeCards, normalizeDetailed, normalizeSections } from "@/lib/notesNormalize";
 import type {
   AnalyzeResponse,
   AnswerResponse,
   ChatResponse,
-  DetailedSection,
   Difficulty,
   EngineSource,
   ExamPlanResponse,
-  Flashcard,
   FullNotesResponse,
   Importance,
   MockTestResponse,
   NotesLang,
   NotesResponse,
-  NotesSection,
   PapersResponse,
   PlanDay,
   PlanItem,
@@ -269,10 +267,13 @@ export async function topicNotesAi(input: {
   subject?: string;
   syllabus?: string;
   language?: NotesLang;
+  /** Real past questions on this topic — the notes must prepare for THEM. */
+  examQuestions?: string[];
 }): Promise<NotesResponse> {
+  const pyq = (input.examQuestions ?? []).filter(Boolean).slice(0, 8);
   const prompt = `Write study notes for ONE topic from the syllabus below.
 
-STRICT: only explain what the syllabus itself lists. Do not invent facts, formulas or dates.
+STRICT: only explain what the syllabus itself lists. Do not invent facts, formulas or dates. Real past questions given below MUST appear inside the exam-questions section.
 ${MATH_RULE}
 ${LANGUAGE_RULE(input.language)}
 
@@ -282,20 +283,22 @@ Syllabus lines for it: ${input.topic.description || "(see syllabus)"}
 
 ${input.subject ? `Course: ${input.subject}` : ""}
 Syllabus excerpt:
-"""${(input.syllabus ?? "").slice(0, 4000)}"""
-
+"""${(input.syllabus ?? "").slice(0, 5000)}"""
+${pyq.length > 0 ? `\nReal past exam questions on this topic:\n${pyq.map((q) => `- ${q}`).join("\n")}\n` : ""}
 Return ONLY:
 {"detailed":[{"heading":"...","paragraphs":["..."]}],"notes":[{"heading":"...","bullets":["..."]}],"cards":[{"q":"...","a":"..."}]}
 
-detailed: 3 sections (concept → syllabus points → how to study for the exam), 2-3 paragraphs each.
-notes: 2 sections of short bullets.
+detailed: EXACTLY these 12 sections in order, each 2-4 paragraphs (skip a section only when genuinely inapplicable — e.g. no differences to compare):
+1 "Topic introduction"  2 "Detailed explanation (easy language)"  3 "Important definitions"  4 "Main concepts and key points"  5 "Examples"  6 "Important features or characteristics"  7 "Advantages and disadvantages"  8 "Differences and comparisons"  9 "Important exam questions"  10 "Exam-ready short answers"  11 "Detailed answers for long questions"  12 "Quick revision summary".
+For 9-11: real past questions first (when given), then syllabus-shaped questions; answers must be built only from the syllabus points.
+notes: 2-3 sections of short revision bullets.
 cards: 6-10 question/answer flashcards.`;
 
   const parsed = await generateJson<{
     detailed?: unknown;
     notes?: unknown;
     cards?: unknown;
-  }>(prompt, { temperature: 0.4, maxTokens: 1800, timeoutMs: 90_000 });
+  }>(prompt, { temperature: 0.4, maxTokens: 3500, timeoutMs: 90_000 });
 
   const detailed = normalizeDetailed(parsed?.detailed);
   const notes = normalizeSections(parsed?.notes);
@@ -305,48 +308,10 @@ cards: 6-10 question/answer flashcards.`;
   return { ok: true, detailed, notes, cards, source: "ai" };
 }
 
-export function normalizeDetailed(raw: unknown): DetailedSection[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry) => {
-      const item = entry as { heading?: unknown; paragraphs?: unknown };
-      const heading = asString(item?.heading, 120);
-      const paragraphs = Array.isArray(item?.paragraphs)
-        ? (item.paragraphs as unknown[]).map((p) => asString(p, 900)).filter(Boolean).slice(0, 5)
-        : [];
-      return heading && paragraphs.length > 0 ? { heading, paragraphs } : null;
-    })
-    .filter((s): s is DetailedSection => s !== null)
-    .slice(0, 6);
-}
-
-export function normalizeSections(raw: unknown): NotesSection[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry) => {
-      const item = entry as { heading?: unknown; bullets?: unknown };
-      const heading = asString(item?.heading, 120);
-      const bullets = Array.isArray(item?.bullets)
-        ? (item.bullets as unknown[]).map((b) => asString(b, 300)).filter(Boolean).slice(0, 10)
-        : [];
-      return heading && bullets.length > 0 ? { heading, bullets } : null;
-    })
-    .filter((s): s is NotesSection => s !== null)
-    .slice(0, 4);
-}
-
-export function normalizeCards(raw: unknown): Flashcard[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry) => {
-      const item = entry as { q?: unknown; a?: unknown };
-      const q = asString(item?.q, 300);
-      const a = asString(item?.a, 500);
-      return q && a ? { q, a } : null;
-    })
-    .filter((c): c is Flashcard => c !== null)
-    .slice(0, 14);
-}
+// Re-exported for existing importers — the definitions now live in
+// @/lib/notesNormalize so the server-side /api/notes route can share them
+// without importing the browser model pipeline.
+export { normalizeCards, normalizeDetailed, normalizeSections };
 
 /* -------------------------------------------------------------------------- */
 /*                          5 · whole-syllabus notes                           */

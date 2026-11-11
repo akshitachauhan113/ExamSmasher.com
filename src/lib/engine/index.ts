@@ -7,6 +7,7 @@ import type {
   ExamPlanResponse,
   FullNotesResponse,
   MockTestResponse,
+  NotesGenerationResponse,
   NotesLang,
   NotesResponse,
   PapersResponse,
@@ -34,7 +35,7 @@ import type { AnswerRulesInput, ChatRulesInput, SolutionPaperInput, SolutionsRul
 import { buildExamPlanRules } from "./rules/examplan";
 import { buildPyqEvidence } from "./rules/evidence";
 import type { PyqEvidenceInput } from "./rules/evidence";
-import { buildFullNotesRules, buildTopicNotesRules } from "./rules/notes";
+import { buildFullNotesRules, buildTopicNotesRules, sliceSyllabusToUnit } from "./rules/notes";
 import { buildPlanRules, daysToMarkdown } from "./rules/plan";
 import type { PlanPick, PlanRulesInput } from "./rules/plan";
 import { mapQuestionsToTopics, parsePapersRules } from "./rules/pyq";
@@ -197,16 +198,67 @@ export interface TopicNotesInput {
   subject?: string;
   syllabus?: string;
   language?: NotesLang;
+  /** Real past questions on this topic — quoted in the notes, never invented. */
+  examQuestions?: string[];
+}
+
+/**
+ * Asks the server route for model-written notes. Returns null (silently, so
+ * the caller falls through) when there is no key, the route fails or the
+ * network is down — the key never leaves the server either way.
+ */
+async function serverTopicNotes(input: TopicNotesInput): Promise<NotesResponse | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "topic",
+        subject: input.subject ?? "Course",
+        syllabus: input.syllabus ?? "",
+        language: input.language === "hinglish" ? "hinglish" : "english",
+        topic: {
+          title: input.topic.title,
+          description: input.topic.description,
+          keywords: input.topic.keywords,
+          chapter: input.topic.chapter,
+        },
+        examQuestions: input.examQuestions ?? [],
+      }),
+      signal: AbortSignal.timeout(80_000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null; // includes 503 no-key → straight to the fallbacks
+    const data = (await res.json()) as NotesGenerationResponse;
+    if (!data.ok || !Array.isArray(data.detailed) || data.detailed.length === 0) return null;
+    return {
+      ok: true,
+      detailed: data.detailed,
+      notes: data.notes,
+      cards: data.cards,
+      source: "ai",
+      via: "server",
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function topicNotes(input: TopicNotesInput): Promise<NotesResponse> {
+  // 1) the server-side model (a real key, high quality, key stays private)
+  const server = await serverTopicNotes(input);
+  if (server) return server;
+
+  // 2) the in-browser model if it happens to be ready, else the rules —
+  //    either way the footer label matches what actually wrote the notes.
   const rules = () => buildTopicNotesRules(input);
   const { value } = await withAi(
     () => topicNotesAi(input),
     rules,
     { waitMs: WAIT.prose, timeoutMs: 90_000 },
   );
-  return value;
+  return value.source === "ai" ? { ...value, via: "browser" } : value;
 }
 
 export interface FullNotesInput {
@@ -214,15 +266,65 @@ export interface FullNotesInput {
   subject: string;
   language?: NotesLang;
   topics: Topic[];
+  /** When set, only this unit's syllabus lines are used (unit-wise notes). */
+  unit?: string;
+}
+
+/** Server-side document notes (whole syllabus or one unit) or null. */
+async function serverDocumentNotes(input: FullNotesInput): Promise<FullNotesResponse | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "document",
+        subject: input.subject,
+        syllabus: input.syllabus,
+        language: input.language === "hinglish" ? "hinglish" : "english",
+        unit: input.unit,
+        topicTitles: input.topics.map((t) => ({ title: t.title, chapter: t.chapter })),
+      }),
+      signal: AbortSignal.timeout(120_000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as NotesGenerationResponse;
+    if (!data.ok || !data.markdown) return null;
+    return { ok: true, markdown: data.markdown, source: "ai", via: "server" };
+  } catch {
+    return null;
+  }
 }
 
 export async function fullNotes(input: FullNotesInput): Promise<FullNotesResponse> {
-  const rules = () => buildFullNotesRules(input);
-  const { value } = await withAi(() => fullNotesAi(input), rules, {
+  // Unit-wise: scope EVERY engine (server, browser, rules) to that unit's
+  // own syllabus lines first — never silently fall back to the whole course.
+  let scoped = input;
+  if (input.unit) {
+    const sliced = sliceSyllabusToUnit(input.syllabus, input.unit);
+    if (!sliced) {
+      return {
+        ok: false,
+        error: `Unit "${input.unit}" ke syllabus lines nahi mile — syllabus dobara analyse karo.`,
+      };
+    }
+    scoped = {
+      ...input,
+      syllabus: sliced,
+      topics: input.topics.filter((t) => t.chapter === input.unit),
+    };
+  }
+
+  const server = await serverDocumentNotes(scoped);
+  if (server) return server;
+
+  const rules = () => buildFullNotesRules(scoped);
+  const { value } = await withAi(() => fullNotesAi(scoped), rules, {
     waitMs: WAIT.prose,
     timeoutMs: 180_000,
   });
-  return value;
+  return value.source === "ai" ? { ...value, via: "browser" } : value;
 }
 
 /* -------------------------------------------------------------------------- */

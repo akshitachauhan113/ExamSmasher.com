@@ -1,11 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { CheckIcon } from "@/components/Icons";
 import { AlertIcon } from "@/components/Icons";
 import { BAND_LABEL, TREND_LABEL } from "@/lib/exam";
 import type { ExamTopic, PyqQuestion, Topic, TopicResult } from "@/lib/types";
 import { PyqPractice } from "./PyqPractice";
 import { TopicNotes } from "./TopicNotes";
+import { TopicVideos, useTopicVideos } from "./TopicVideos";
+import { VideoPlayerModal, type PlayerVideo } from "./VideoPlayerModal";
 
 const BAND_COLOR: Record<ExamTopic["band"], string> = {
   must: "var(--bad)",
@@ -27,9 +30,20 @@ interface TopicPanelProps {
   band: ExamTopic["band"];
   /** Real past questions that map to this topic. */
   pyqQuestions?: PyqQuestion[];
+  /** Language code from the form (en / hi / hinglish / …) — video queries. */
+  language: string;
+  /** ALL syllabus topics — per-topic video coverage is measured against these. */
+  allTopics: Topic[];
+  subtopicsByTopicId: Record<string, string[]>;
   onToggleStudied: () => void;
 }
 
+/**
+ * ONE surface per syllabus topic: what the exam asks (real PYQ), what to
+ * watch (a real recommended YouTube video + alternatives, discovered
+ * server-side), what to read (12-element notes), and a completion tick —
+ * without navigating anywhere else.
+ */
 export function TopicPanel({
   topic,
   index,
@@ -40,8 +54,42 @@ export function TopicPanel({
   examEntry,
   band,
   pyqQuestions,
+  language,
+  allTopics,
+  subtopicsByTopicId,
   onToggleStudied,
 }: TopicPanelProps) {
+  /* ---- real videos for THIS topic (lazy, batched, cached) ---- */
+  const videos = useTopicVideos({
+    topic,
+    subject,
+    language,
+    allTopics,
+    subtopicsByTopicId,
+    enabled: Boolean(result) && !result?.skipped,
+  });
+
+  /* ---- the four per-topic actions, all driven from here ---- */
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [preview, setPreview] = useState<PlayerVideo | null>(null);
+
+  const recommended = videos.videos && videos.videos.length > 0 ? videos.videos[0] : null;
+  const videoCount = videos.videos?.length ?? 0;
+
+  const focusNotes = () => {
+    setNotesOpen(true);
+    document.getElementById(`topic-notes-${topic.id}`)?.scrollIntoView({ block: "nearest" });
+  };
+
+  const playRecommended = () => {
+    if (!recommended) return;
+    setPreview({ id: recommended.id, title: recommended.title, channelTitle: recommended.channel });
+  };
+
+  const focusOthers = () => {
+    document.getElementById(`topic-others-${topic.id}`)?.scrollIntoView({ block: "nearest" });
+  };
+
   return (
     <section
       id={`topic-${topic.id}`}
@@ -66,44 +114,16 @@ export function TopicPanel({
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <h3
-              className="text-[1.05rem] font-extrabold leading-tight"
-              style={
-                studied
-                  ? { textDecoration: "line-through", textDecorationColor: "var(--good)" }
-                  : undefined
-              }
-            >
-              {topic.title}
-            </h3>
-
-            <button
-              type="button"
-              onClick={onToggleStudied}
-              aria-pressed={studied}
-              className="btn-ghost flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs"
-              style={
-                studied
-                  ? {
-                      borderColor: "color-mix(in srgb, var(--good) 55%, var(--line))",
-                      color: "var(--good)",
-                    }
-                  : undefined
-              }
-            >
-              <span
-                className="grid h-4 w-4 place-items-center rounded border"
-                style={{
-                  borderColor: studied ? "var(--good)" : "var(--line)",
-                  background: studied ? "var(--good)" : "transparent",
-                }}
-              >
-                {studied && <CheckIcon width={11} height={11} />}
-              </span>
-              {studied ? "Studied" : "Mark as studied"}
-            </button>
-          </div>
+          <h3
+            className="text-[1.05rem] font-extrabold leading-tight"
+            style={
+              studied
+                ? { textDecoration: "line-through", textDecorationColor: "var(--good)" }
+                : undefined
+            }
+          >
+            {topic.title}
+          </h3>
 
           {topic.description && (
             <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">{topic.description}</p>
@@ -140,6 +160,76 @@ export function TopicPanel({
       </header>
 
       <div className="ml-0 space-y-3 sm:ml-11">
+        {/* The four per-topic actions in one row — notes, the recommended
+            video, the alternatives, and the completion tick. */}
+        <div
+          className="flex flex-wrap gap-1.5"
+          role="group"
+          aria-label={`Actions for ${topic.title}`}
+        >
+          <button
+            type="button"
+            onClick={focusNotes}
+            aria-expanded={notesOpen}
+            className="btn-ghost flex items-center gap-1 px-2.5 py-1 text-xs"
+          >
+            📒 View Notes
+          </button>
+          <button
+            type="button"
+            onClick={playRecommended}
+            disabled={!recommended}
+            title={
+              recommended
+                ? `Preview: ${recommended.title}`
+                : videos.status === "loading"
+                  ? "Videos load ho rahe hain…"
+                  : "Is topic ke liye abhi koi video nahi mila"
+            }
+            className="btn-primary flex items-center gap-1 px-2.5 py-1 text-xs"
+          >
+            ▶ Watch recommended video
+          </button>
+          <button
+            type="button"
+            onClick={focusOthers}
+            disabled={videoCount < 2}
+            title={
+              videoCount >= 2
+                ? "Alternative lectures dekho"
+                : "Abhi alternatives nahi mile"
+            }
+            className="btn-ghost flex items-center gap-1 px-2.5 py-1 text-xs"
+          >
+            🎞 View other videos{videoCount > 1 ? ` (${videoCount - 1})` : ""}
+          </button>
+          <button
+            type="button"
+            onClick={onToggleStudied}
+            aria-pressed={studied}
+            className="btn-ghost flex items-center gap-1 px-2.5 py-1 text-xs"
+            style={
+              studied
+                ? {
+                    borderColor: "color-mix(in srgb, var(--good) 55%, var(--line))",
+                    color: "var(--good)",
+                  }
+                : undefined
+            }
+          >
+            <span
+              className="grid h-4 w-4 place-items-center rounded border"
+              style={{
+                borderColor: studied ? "var(--good)" : "var(--line)",
+                background: studied ? "var(--good)" : "transparent",
+              }}
+            >
+              {studied && <CheckIcon width={11} height={11} />}
+            </span>
+            {studied ? "Completed ✓" : "Mark as completed"}
+          </button>
+        </div>
+
         {/* What the exam actually asks — shown first so the student knows what
             to watch FOR rather than watching passively. */}
         {pyqQuestions && pyqQuestions.length > 0 && (
@@ -179,60 +269,33 @@ export function TopicPanel({
           </div>
         )}
 
-        {result && !result.error && !result.skipped && result.searches.length === 0 && (
-          <div className="rounded-xl border border-dashed border-[var(--line)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-            Is topic ke liye koi search link nahi ban paaya — topic ka naam thoda specific karke
-            dobara analyse karo.
-          </div>
-        )}
-
-        {result && !result.error && !result.skipped && result.searches.length > 0 && (
-          <div className="card p-4">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm font-extrabold">🎬 YouTube search suggestions</p>
-              <span className="chip">{result.searches.length} links</span>
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">
-              Ye YouTube ki apni results page par khulte hain —{" "}
-              <strong className="text-[var(--text)]">humne koi video rank ya verify nahi kiya</strong>.
-              Jo achha lage wahi chuno.
-            </p>
-            <ul className="mt-2.5 space-y-1.5">
-              {result.searches.map((search) => (
-                <li key={search.url}>
-                  <a
-                    href={search.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs transition-colors hover:bg-[var(--surface-2)]"
-                    style={{ borderColor: "var(--line)" }}
-                  >
-                    <span className="min-w-0 truncate font-semibold">
-                      <span
-                        className="mr-1.5 rounded px-1.5 py-0.5 text-[0.62rem] font-extrabold uppercase tracking-wide"
-                        style={{
-                          background: "color-mix(in srgb, var(--brand) 12%, transparent)",
-                          color: "var(--brand)",
-                        }}
-                      >
-                        {search.label}
-                      </span>
-                      {search.query}
-                    </span>
-                    <span className="shrink-0 text-[var(--muted)]">↗</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-[0.7rem] text-[var(--muted)]">
-              Queries: {result.queries.join(" · ")}
-            </p>
-          </div>
-        )}
+        {/* Real YouTube videos for this topic — one recommendation plus
+            alternatives; honest search-link fallback inside when discovery
+            is unavailable. */}
+        <TopicVideos
+          topic={topic}
+          state={videos}
+          searches={result?.searches ?? []}
+          queries={result?.queries ?? []}
+          totalTopics={allTopics.length}
+          onRetry={videos.retry}
+          onPreview={setPreview}
+        />
 
         {/* Notes + flashcards for this topic, straight from the syllabus */}
-        <TopicNotes topic={topic} subject={subject} syllabus={syllabus} />
+        <TopicNotes
+          topic={topic}
+          subject={subject}
+          syllabus={syllabus}
+          examQuestions={pyqQuestions?.map((q) => q.text)}
+          open={notesOpen}
+          onOpenChange={setNotesOpen}
+        />
       </div>
+
+      {/* In-app preview of a REAL video id — watch here, close, and you are
+          exactly where you left off. */}
+      <VideoPlayerModal video={preview} onClose={() => setPreview(null)} />
     </section>
   );
 }

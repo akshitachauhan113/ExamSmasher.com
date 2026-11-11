@@ -28,3 +28,21 @@ export function formatMinutes(totalSeconds: number): string {
 export function videoUrl(id: string): string {
   return `https://www.youtube.com/watch?v=${id}`;
 }
+
+/** Human (Hinglish) label for why the YouTube API could not answer. */
+export function apiReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "no-key":
+      return "key set nahi";
+    case "quota":
+      return "quota khatam";
+    case "bad-request":
+      return "request galat";
+    case "throttled":
+      return "bahut zyada requests";
+    case "network":
+      return "network issue";
+    default:
+      return "result nahi mila";
+  }
+}

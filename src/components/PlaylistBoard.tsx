@@ -5,7 +5,7 @@ import { ExternalIcon } from "@/components/Icons";
 import { TabBar } from "./TabBar";
 import { VideoPlayerModal, type PlayerVideo } from "./VideoPlayerModal";
 import { BAND_LABEL } from "@/lib/exam";
-import { formatDuration, formatViews } from "@/lib/format";
+import { apiReasonLabel, formatDuration, formatViews } from "@/lib/format";
 import { readVideoCache, writeVideoCache } from "@/lib/videoCache";
 import type {
   CoursePlaylist,
@@ -63,24 +63,6 @@ const PRIORITY_META: Record<SmartPriority, { label: string; color: string }> = {
 
 type CoverageFilter = "all" | "pending" | "covered";
 type WatchedFilter = "all" | "pending" | "watched";
-
-/** Human (Hinglish) label for why the YouTube API could not answer. */
-function apiReasonLabel(reason?: string): string {
-  switch (reason) {
-    case "no-key":
-      return "key set nahi";
-    case "quota":
-      return "quota khatam";
-    case "bad-request":
-      return "request galat";
-    case "throttled":
-      return "bahut zyada requests";
-    case "network":
-      return "network issue";
-    default:
-      return "result nahi mila";
-  }
-}
 
 /**
  * The two playlists as a compact two-tab board of GROUPED suggestions.
