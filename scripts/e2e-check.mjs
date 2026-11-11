@@ -106,9 +106,8 @@ const collectVideos = () =>
       thumb: li.querySelector('img[src*="i.ytimg.com"]')?.src ?? null,
     }));
     const fallbackLinks = sec.querySelectorAll('a[href*="youtube.com/results"]').length;
-    const fallbackLabel = /YouTube API abhi available nahi|koi suitable lecture nahi mila/.test(
-      sec.textContent ?? "",
-    );
+    const labelText = sec.textContent ?? "";
+    const fallbackLabel = /YouTube API abhi available nahi|koi suitable lecture nahi mila/.test(labelText);
     return {
       topicId: sec.getAttribute("data-topic-videos"),
       recommended: Boolean(recLink && recImg),
@@ -122,6 +121,7 @@ const collectVideos = () =>
       others,
       fallbackLinks,
       fallbackLabel,
+      labelText,
       loading: /Dhoond rahe hain/.test(sec.textContent ?? ""),
     };
   });
@@ -252,13 +252,21 @@ async function run() {
       fs.writeFileSync(paperFile, PAPER, "utf8");
       await tab(page, "PYQ Analysis").click();
       await page.locator('input[aria-label="Upload previous-year papers"]').setInputFiles(paperFile);
+      // Every paper needs a typed year before it can be read.
+      await page.locator('input[aria-label="Paper year"]').fill("2023");
       await page.locator('button:has-text("Read questions")').click();
       const readSpan = page.locator('text=/\\d+ questions read/');
       await readSpan.waitFor({ timeout: 60_000 });
       const readText = (await readSpan.first().textContent()) ?? "";
       const qCount = Number((readText.match(/(\d+) questions read/) ?? [])[1] ?? 0);
-      await page.locator('button:has-text("Build exam plan")').click();
-      await page.locator('button:has-text("Rebuild plan")').waitFor({ timeout: 90_000 });
+      // Reading auto-builds the plan; wait for it (click build only if the
+      // auto-build somehow did not run).
+      try {
+        await page.locator('button:has-text("Rebuild plan")').waitFor({ timeout: 90_000 });
+      } catch {
+        await page.locator('button:has-text("Build exam plan")').click({ timeout: 15_000 });
+        await page.locator('button:has-text("Rebuild plan")').waitFor({ timeout: 90_000 });
+      }
 
       await openComplete(page);
       const badge = page.locator('button:has-text("past question")').first();
@@ -274,6 +282,7 @@ async function run() {
     }
 
     /* ---------------- case 7 · notes for 3 topics (12-element) ---------------- */
+    await openComplete(page);
     const topicSections = page.locator("section[data-topic-id]");
     const noteSummaries = [];
     for (let i = 0; i < 3; i += 1) {
@@ -291,7 +300,7 @@ async function run() {
         const hasIntro = detailed.some((h) => /introduction|shuruwat/i.test(h));
         const pyqQuoted =
           pyqTopicId && (await section.getAttribute("data-topic-id")) === pyqTopicId
-            ? /past paper/i.test(bundle.text)
+            ? /past paper|divisible by 3/i.test(bundle.text)
             : null;
         const ok =
           detailed.length >= 8 &&
@@ -317,6 +326,7 @@ async function run() {
     /* ---------------- case 8 · mark completed + refresh persistence ---------------- */
     let preReloadCompleted = false;
     try {
+      await openComplete(page);
       const t3 = topicSections.nth(3);
       await t3.locator('button:has-text("Mark as completed")').click();
       await t3.locator('button:has-text("Completed")').waitFor({ timeout: 10_000 });
@@ -416,25 +426,30 @@ async function runFallback(page) {
       .locator("[data-topic-videos]")
       .first()
       .waitFor({ timeout: 90_000 });
-    await page
-      .waitForFunction(
-        () =>
-          [...document.querySelectorAll("[data-topic-videos]")].some(
-            (s) =>
-              /YouTube API abhi available nahi|koi suitable lecture nahi mila/.test(s.textContent ?? "") ||
-              s.querySelector('a[href*="youtube.com/results"]'),
-          ),
-        undefined,
-        { timeout: 90_000 },
-      );
+    // Wait for the LABEL, not just links: the search links render from props
+    // immediately, but the honest reason text only appears once the API
+    // answer (no-key) has resolved into every section.
+    await page.waitForFunction(
+      () => {
+        const secs = [...document.querySelectorAll("[data-topic-videos]")];
+        const loading = secs.some((s) => /Dhoond rahe hain/.test(s.textContent ?? ""));
+        const labelled = secs.filter((s) =>
+          /YouTube API abhi available nahi|koi suitable lecture nahi mila/.test(s.textContent ?? ""),
+        ).length;
+        return !loading && labelled >= 2;
+      },
+      undefined,
+      { timeout: 120_000 },
+    );
     const videos = await page.evaluate(collectVideos);
     const withRec = videos.filter((v) => v.recommended);
     const fallbackLinks = videos.reduce((n, v) => n + v.fallbackLinks, 0);
     const labelled = videos.filter((v) => v.fallbackLabel).length;
+    const keyLabelled = videos.filter((v) => v.fallbackLabel && /key set nahi/.test(v.labelText ?? "")).length;
     record(
       "11. No YouTube key → honest labelled fallback, NO fake video cards",
-      withRec.length === 0 && fallbackLinks >= 2 && labelled >= 1,
-      `fakeCards=${withRec.length} fallbackLinks=${fallbackLinks} labelledSections=${labelled} reasonShown=${videos.some((v) => /key set nahi/.test("")) || labelled >= 1}`,
+      withRec.length === 0 && fallbackLinks >= 6 && labelled >= 2 && keyLabelled >= 2,
+      `fakeCards=${withRec.length} fallbackLinks=${fallbackLinks} labelledSections=${labelled} keyLabelled=${keyLabelled}`,
     );
 
     const topic0 = page.locator("section[data-topic-id]").first();
